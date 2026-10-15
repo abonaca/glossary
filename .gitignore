@@ -1,0 +1,13 @@
+# Python / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Archived material, kept locally only
+scrap/
+
+# Large or regenerable data (local only)
+data/cutouts/
+data/raw/*
+!data/raw/z_list.txt
+output/
