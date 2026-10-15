@@ -5,3 +5,5 @@ __pycache__/
 
 # Archived material, kept locally only
 scrap/
+output/
+data/*/raw/
