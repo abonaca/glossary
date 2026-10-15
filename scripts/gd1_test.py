@@ -25,6 +25,8 @@ import jax
 import jax.numpy as jnp
 jax.config.update("jax_enable_x64", True)
 import diffrax
+import interpax
+from typing import Any
 
 import streamsculptor
 from streamsculptor import potential
@@ -97,24 +99,110 @@ def load_desi(p_min=0.5):
 
     return dict(source_id=np.array(t['SOURCE_ID']), phi1=cg.phi1.wrap_at(180*u.deg).deg, phi2=cg.phi2.deg,
                 dist=10**(np.array(t['DISTMOD'])/5 - 2), pm1=cg.pm_phi1_cosphi2.to(u.mas/u.yr).value,
-                pm2=cg.pm_phi2.to(u.mas/u.yr).value, vr=np.array(t['V_LOS']), vr_err=np.array(t['V_ERR']),
+                pm2=cg.pm_phi2.to(u.mas/u.yr).value, pm1_err=np.array(t['PM_PHI1_ERR']),
+                pm2_err=np.array(t['PM_PHI2_ERR']), vr=np.array(t['V_LOS']), vr_err=np.array(t['V_ERR']),
                 p_thin=np.array(t['P_THIN']), p_cocoon=np.array(t['P_COCOON']))
 
 
 # Setup #
 
-def load_potential(kind='mwlmc'):
-    """Base Milky Way potential: 'static' (gala MilkyWayPotential) or 'mwlmc' (time-dependent MW+LMC)"""
+# MW and LMC models computed with AGAMA (scripts/mw_lmc_agama.py; Vasiliev, Belokurov & Erkal 2021 models)
+AGAMA_MWLMC_FILE = os.path.join(DATA_DIR, 'mw_lmc_agama', 'mw_lmc_1.5e+11.npz')
 
-    if kind=='static':
+class RadialTablePotential(potential.Potential):
+    """Spherical potential tabulated in radius (monotonic cubic spline)"""
+    spl: Any
+
+    def __init__(self, r, phi, units=usys):
+        super().__init__(units)
+        self.spl = interpax.Interpolator1D(x=jnp.asarray(r), f=jnp.asarray(phi), method='monotonic')
+
+    def potential(self, xyz, t):
+        return self.spl(jnp.sqrt(jnp.sum(xyz**2)))
+
+class AxisymTablePotential(potential.Potential):
+    """Axisymmetric potential tabulated on a grid in u=asinh(R/a), v=asinh(z/b) (cubic spline);
+    the table covers z >= 0 and is mirrored to z < 0"""
+    spl: Any
+    a: float
+    b: float
+
+    def __init__(self, u, v, phi, a, b, units=usys):
+        super().__init__(units)
+        v_full = np.hstack([-v[:0:-1], v])
+        phi_full = np.hstack([phi[:,:0:-1], phi], )
+        self.spl = interpax.Interpolator2D(x=jnp.asarray(u), y=jnp.asarray(v_full), f=jnp.asarray(phi_full),
+                                           method='cubic2')
+        self.a, self.b = a, b
+
+    def potential(self, xyz, t):
+        R = jnp.sqrt(xyz[0]**2 + xyz[1]**2)
+        return self.spl(jnp.arcsinh(R/self.a), jnp.arcsinh(xyz[2]/self.b))
+
+class FrameAcceleration(potential.Potential):
+    """Uniform acceleration of the Milky Way-centered (non-inertial) frame, tabulated in time.
+    gradient returns the MW center acceleration a_MW(t), so that test particles feel -a_MW"""
+    ax: Any
+    ay: Any
+    az: Any
+
+    def __init__(self, t, acc, units=usys):
+        super().__init__(units)
+        self.ax, self.ay, self.az = [interpax.Interpolator1D(x=jnp.asarray(t), f=jnp.asarray(acc[:,i]), method='cubic2')
+                                     for i in range(3)]
+
+    def potential(self, xyz, t):
+        raise NotImplementedError("uniform acceleration has no scalar potential")
+
+    def gradient(self, xyz, t):
+        return jnp.array([self.ax(t), self.ay(t), self.az(t)]).reshape(3)
+
+def agama_mw(tab):
+    """Milky Way of Vasiliev, Belokurov & Erkal (2021) from the AGAMA tables: bulge, exponential disk, halo"""
+
+    bulge = RadialTablePotential(tab['r'], tab['phi_bulge'])
+    halo = RadialTablePotential(tab['r'], tab['phi_halo'])
+    disk = AxisymTablePotential(tab['disk_u'], tab['disk_v'], tab['phi_disk'], *tab['disk_scales'])
+
+    return [bulge, disk, halo]
+
+def agama_lmc(tab):
+    """Moving LMC and the reflex acceleration of the Milky Way frame from the AGAMA tables"""
+
+    t, lmc_w = tab['t'], tab['lmc_w']
+    cx, cy, cz = [interpax.Interpolator1D(x=jnp.asarray(t), f=jnp.asarray(lmc_w[:,i]), method='cubic2')
+                  for i in range(3)]
+    center = lambda time: jnp.array([cx(time), cy(time), cz(time)]).reshape(3)
+    lmc = potential.TimeDepTranslatingPotential(pot=RadialTablePotential(tab['r'], tab['phi_lmc']), center_spl=center)
+
+    return [lmc, FrameAcceleration(t, tab['mw_acc'])]
+
+def load_potential(kind='v21_lmc'):
+    """Base Milky Way potential:
+    'v21': static Milky Way of Vasiliev, Belokurov & Erkal (2021), computed with AGAMA
+    'v21_lmc': the same Milky Way plus the moving LMC (1.5e11 Msun) and the Milky Way reflex acceleration
+    'static' (gala MilkyWayPotential) and 'mwlmc' (streamsculptor MW_LMC_Potential): earlier, mismatched pair"""
+
+    if kind in ('v21', 'v21_lmc'):
+        tab = dict(np.load(AGAMA_MWLMC_FILE))
+        comps = agama_mw(tab) + (agama_lmc(tab) if kind=='v21_lmc' else [])
+        return potential.Potential_Combine(comps, units=usys)
+    elif kind=='static':
         return potential.GalaMilkyWayPotential(units=usys)
     elif kind=='mwlmc':
         return potential.MW_LMC_Potential(units=usys)
     else:
         raise ValueError(f"unknown potential kind: {kind}")
 
-def progenitor(kind='mwlmc'):
-    """Present-day GD-1 progenitor [kpc, kpc/Myr], fitted separately in each potential"""
+def progenitor(kind='mwlmc', source='fit'):
+    """Present-day GD-1 progenitor [kpc, kpc/Myr] for the given potential.
+    source: 'fit' (from fit_progenitor, output/gd1_test/progenitor.h5) or 'notebook' (earlier hand-tuned values)"""
+
+    if source=='fit':
+        with h5py.File(os.path.join(OUT_DIR, 'progenitor.h5'), 'r') as f:
+            return f[kind]['w0'][:]
+    elif source!='notebook':
+        raise ValueError(f"unknown progenitor source: {source}")
 
     if kind=='static':
         prog = np.load(os.path.join(DATA_DIR, 'GD1_progenitor.npy'), allow_pickle=True).item()
@@ -150,6 +238,17 @@ def to_gd1_frame(w):
                 pm1=cg.pm_phi1_cosphi2.to(u.mas/u.yr).value, pm2=cg.pm_phi2.to(u.mas/u.yr).value,
                 vr=vr_kms, vgsr=vr_kms + n @ V_SUN_GSR)
 
+def progenitor_from_obs(phi1, phi2, dist, pm1, pm2, vr):
+    """GD-1 frame observables [deg, kpc, mas/yr, km/s] -> simulation cartesian phase space [kpc, kpc/Myr]"""
+
+    cg = gc.GD1Koposov10(phi1=phi1*u.deg, phi2=phi2*u.deg, distance=dist*u.kpc, pm_phi1_cosphi2=pm1*u.mas/u.yr,
+                         pm_phi2=pm2*u.mas/u.yr, radial_velocity=vr*u.km/u.s)
+    ceq = cg.transform_to(coord.ICRS())
+    x, v = jc.ICRS_to_simcart(ceq.ra.rad, ceq.dec.rad, dist, ceq.pm_ra_cosdec.to(u.mas/u.yr).value,
+                              ceq.pm_dec.to(u.mas/u.yr).value, (vr*u.km/u.s).to(u.kpc/u.Myr).value)
+
+    return np.hstack([np.asarray(x), np.asarray(v)])
+
 
 # Stream models #
 
@@ -159,13 +258,14 @@ class Stream:
     kind: 'static' or 'mwlmc', sets the progenitor and (if pot not given) the base potential
     pot: base potential; pass a prebuilt one to avoid rebuilding the MW+LMC splines
     dt_release: time between releases [Myr]; each release adds one star at each Lagrange point
+    prog: progenitor source passed to progenitor() ('fit' or 'notebook'), or a phase-space array
     """
 
-    def __init__(self, kind='mwlmc', pot=None, dt_release=1., t_age=2500., t_dissolve=-300., Msat=1e4,
+    def __init__(self, kind='mwlmc', pot=None, prog='fit', dt_release=1., t_age=2500., t_dissolve=-300., Msat=1e4,
                  rtol=1e-6, atol=1e-6):
         self.kind = kind
         self.pot = load_potential(kind) if pot is None else pot
-        self.prog_w0 = progenitor(kind)
+        self.prog_w0 = progenitor(kind, source=prog) if isinstance(prog, str) else np.asarray(prog)
         self.dt_release = dt_release
         self.t_age = t_age
         self.t_dissolve = t_dissolve
@@ -181,18 +281,21 @@ class Stream:
 
         self.base_model = None
 
-    def initial_conditions(self, pot=None):
-        """Progenitor phase space at -t_age, integrated back in pot (default: base potential)"""
+    def initial_conditions(self, pot=None, prog_w0=None):
+        """Progenitor phase space at -t_age, integrated back in pot (default: base potential)
+        from prog_w0 (default: the stream's progenitor)"""
 
         pot = self.pot if pot is None else pot
-        return pot.integrate_orbit(w0=jnp.asarray(self.prog_w0), t0=0.0, t1=-self.t_age,
+        prog_w0 = self.prog_w0 if prog_w0 is None else prog_w0
+        return pot.integrate_orbit(w0=jnp.asarray(prog_w0), t0=0.0, t1=-self.t_age,
                                    ts=jnp.array([-self.t_age])).ys[0]
 
-    def generate(self, pot=None, seed=532):
-        """Particle-spray stream in pot (default: base potential). Returns the model dict"""
+    def generate(self, pot=None, seed=532, prog_w0=None):
+        """Particle-spray stream in pot (default: base potential) from prog_w0 (default: the stream's progenitor).
+        Returns the model dict"""
 
         pot = self.pot if pot is None else pot
-        ic = self.initial_conditions(pot=pot)
+        ic = self.initial_conditions(pot=pot, prog_w0=prog_w0)
         lead, trail = pot.gen_stream_vmapped(prog_w0=ic, ts=self.ts, seed_num=seed, Msat=self.Msat,
                                              atol=self.atol, rtol=self.rtol, solver=diffrax.Dopri5())
 
@@ -269,13 +372,211 @@ def list_models(name):
         return list(f.keys())
 
 
+# Progenitor fit #
+
+PHI1_PROG = -21.   # progenitor phi1 [deg], fixed in the fit
+
+# fitted progenitor parameters (GD-1 frame at PHI1_PROG); the velocity zero-point offsets of DESI and Hectochelle
+# are profiled out (optimized for every stream model)
+FIT_PARAMS = ['phi2', 'dist', 'pm1', 'pm2', 'vr']
+FIT_SCALES = np.array([0.1, 0.2, 0.1, 0.1, 2.])     # characteristic step sizes for the optimizer
+OFFSET_NAMES = ['dv_desi', 'dv_hecto']
+
+# Gaussian priors on the velocity zero-point offsets [km/s]: DESI from comparisons to Gaia/APOGEE
+# (Koposov+2024, 2025: 0.2-0.9 km/s), Hectochelle/MINESweeper from twilight spectra (Conroy+2019: 0.5 km/s)
+DV_PRIOR = dict(desi=1.0, hecto=0.5)
+
+# radial velocity error model: systematic floors added in quadrature [km/s] (DESI DR1 dark program floor,
+# Koposov+2025; Hectochelle, Conroy+2019) and the Hectochelle scaling of formal errors from repeats (Conroy+2019)
+VR_FLOOR = dict(desi=1.6, hecto=0.5)
+HECTO_ERR_SCALE = 2.
+
+# intrinsic stream widths added in quadrature to measurement errors
+INTRINSIC = dict(phi2=0.25, pm1=0.1, pm2=0.1, vr=2., dm=0.)
+DM_ERR = 0.1   # assumed uncertainty of the DESI distance-modulus track [mag]
+
+def load_fit_data():
+    """Data for the progenitor fit, one entry per observable with phi1, values, errors, and dataset labels.
+    phi2: Gaia members (Starkman+2024), excluding stars more likely in the spur than the stream
+    pm1, pm2: DESI DR2 thin-stream members
+    vr: DESI DR2 thin-stream members (label 0) and Hectochelle main-stream members (label 1; spur stars with
+        phi2 > 0.6 deg excluded), with errors following VR_FLOOR and HECTO_ERR_SCALE
+    dm: DESI DR2 distance-modulus track (Jarvis+2026 Table 1)"""
+
+    t = load_members()
+    t = t[t['stream (MLE)'] > t['spur (MLE)']]
+    cg = t['coord'].transform_to(gc.GD1Koposov10())
+    phi1_g, phi2_g = cg.phi1.wrap_at(180*u.deg).deg, cg.phi2.deg
+
+    desi = load_desi()
+    thin = desi['p_thin'] > desi['p_cocoon']
+    hecto = load_hectochelle()
+    main = hecto['phi2'] < 0.6
+
+    dtrack = Table.read(os.path.join(DATA_DIR, 'jarvis2026_desi_dr2', 'Table1.fits'))
+
+    data = dict(
+        phi2=dict(phi1=phi1_g, y=phi2_g, err=np.zeros(len(phi1_g)), label=np.zeros(len(phi1_g), dtype=int)),
+        pm1=dict(phi1=desi['phi1'][thin], y=desi['pm1'][thin], err=desi['pm1_err'][thin],
+                 label=np.zeros(np.sum(thin), dtype=int)),
+        pm2=dict(phi1=desi['phi1'][thin], y=desi['pm2'][thin], err=desi['pm2_err'][thin],
+                 label=np.zeros(np.sum(thin), dtype=int)),
+        vr=dict(phi1=np.hstack([desi['phi1'][thin], hecto['phi1'][main]]),
+                y=np.hstack([desi['vr'][thin], hecto['vr'][main]]),
+                err=np.hstack([np.sqrt(desi['vr_err'][thin]**2 + VR_FLOOR['desi']**2),
+                               np.sqrt((HECTO_ERR_SCALE*hecto['vr_err'][main])**2 + VR_FLOOR['hecto']**2)]),
+                label=np.hstack([np.zeros(np.sum(thin), dtype=int), np.ones(np.sum(main), dtype=int)])),
+        dm=dict(phi1=np.array(dtrack['phi1'], dtype=float), y=np.array(dtrack['m-M'], dtype=float),
+                err=np.full(len(dtrack), DM_ERR), label=np.zeros(len(dtrack), dtype=int)),
+    )
+
+    return data
+
+def smooth_track(phi1, y, x, sigma=1., n_min=3.):
+    """Gaussian-kernel weighted mean of y vs phi1, evaluated at x (NaN where the effective count < n_min)"""
+
+    w = np.exp(-0.5*((x[:,None] - phi1[None,:])/sigma)**2)
+    norm = np.sum(w, axis=1)
+    out = np.full(len(x), np.nan)
+    ok = norm >= n_min
+    out[ok] = (w[ok] @ y) / norm[ok]
+
+    return out
+
+def obs_from_params(p):
+    """Progenitor phase space from fit parameters (GD-1 frame at PHI1_PROG)"""
+
+    return progenitor_from_obs(PHI1_PROG, p[0], p[1], p[2], p[3], p[4])
+
+def params_from_w0(w0):
+    """Fit parameters from a progenitor phase space"""
+
+    o = to_gd1_frame(np.atleast_2d(w0))
+    return np.array([o['phi2'][0], o['dist'][0], o['pm1'][0], o['pm2'][0], o['vr'][0]])
+
+def soft_l1(chi):
+    """Robust soft-L1 loss, ~chi^2 for small chi and ~2|chi| for large chi"""
+
+    chi = chi[np.isfinite(chi)]
+    return np.sum(2*(np.sqrt(1 + chi**2) - 1))
+
+def vr_cost(dv, d, y_model):
+    """Radial velocity misfit plus Gaussian priors, for zero-point offsets dv = (dv_desi, dv_hecto);
+    data = truth + offset, so each survey's offset is subtracted from its velocities"""
+
+    y = d['y'] - dv[0]*(d['label']==0) - dv[1]*(d['label']==1)
+    chi = (y - y_model) / np.sqrt(d['err']**2 + INTRINSIC['vr']**2)
+
+    return soft_l1(chi) + (dv[0]/DV_PRIOR['desi'])**2 + (dv[1]/DV_PRIOR['hecto'])**2
+
+def best_offsets(d, y_model):
+    """Velocity zero-point offsets minimizing vr_cost for a given model track (profile likelihood)"""
+
+    from scipy.optimize import minimize
+    res = minimize(vr_cost, np.zeros(2), args=(d, y_model), method='L-BFGS-B')
+
+    return res.x
+
+def fit_cost(p, s, data, seed=532, return_terms=False):
+    """Robust (soft-L1) misfit between data and the smoothed tracks of a stream generated from progenitor
+    parameters p. The radial velocity term includes the priors and is minimized over the velocity zero-point offsets"""
+
+    model = s.generate(seed=seed, prog_w0=obs_from_params(p))
+    obs = to_gd1_frame(model['w'])
+    obs['dm'] = 5*np.log10(obs['dist']*100)
+
+    terms = {}
+    for k, d in data.items():
+        y_model = smooth_track(obs['phi1'], obs[k], d['phi1'])
+        if k=='vr':
+            offsets = best_offsets(d, y_model)
+            terms[k] = vr_cost(offsets, d, y_model)
+        else:
+            terms[k] = soft_l1((d['y'] - y_model) / np.sqrt(d['err']**2 + INTRINSIC[k]**2))
+
+    cost = np.sum(list(terms.values()))
+    if return_terms:
+        return cost, terms, dict(zip(OFFSET_NAMES, offsets))
+
+    return cost
+
+def fit_progenitor(kind='mwlmc', pot=None, prog='notebook', dt_release=5., maxiter=600, seed=532, save=True):
+    """Fit the progenitor (phi2, distance, proper motions, radial velocity at PHI1_PROG) to the GD-1 data, using
+    Nelder-Mead on a coarsely sampled stream, with the DESI and Hectochelle velocity offsets profiled out.
+    prog: starting progenitor ('notebook', 'fit', or an array of fit parameters)"""
+
+    from scipy.optimize import minimize
+
+    p0 = np.asarray(prog, dtype=float) if not isinstance(prog, str) else params_from_w0(progenitor(kind, source=prog))
+    s = Stream(kind, pot=pot, prog=obs_from_params(p0), dt_release=dt_release)
+    data = load_fit_data()
+    print(f'start: {dict(zip(FIT_PARAMS, np.round(p0, 4)))}  cost={fit_cost(p0, s, data, seed=seed):.1f}')
+
+    history = []
+    def f(x):
+        c = fit_cost(p0 + x*FIT_SCALES, s, data, seed=seed)
+        history.append(c)
+        if len(history)%25==0:
+            print(f'  {len(history)} evaluations, best cost {np.min(history):.1f}', flush=True)
+        return c
+
+    # initial simplex with one FIT_SCALES step per parameter (scipy's default steps are tiny around x=0)
+    n = len(p0)
+    simplex = np.vstack([np.zeros(n), np.eye(n)])
+    res = minimize(f, np.zeros(n), method='Nelder-Mead',
+                   options=dict(maxiter=maxiter, xatol=1e-2, fatol=0.1, adaptive=True, initial_simplex=simplex))
+    p_best = p0 + res.x*FIT_SCALES
+    cost, terms, offsets = fit_cost(p_best, s, data, seed=seed, return_terms=True)
+    print(f'best: {dict(zip(FIT_PARAMS, np.round(p_best, 4)))}  offsets={ {k: round(v, 2) for k, v in offsets.items()} }')
+    print(f'  cost={cost:.1f}  terms={ {k: round(v, 1) for k, v in terms.items()} }')
+    print(f'  {res.nfev} evaluations, converged: {res.success} ({res.message})')
+
+    if save:
+        save_progenitor_fit(kind, p_best, offsets, cost, terms, dict(dt_release=dt_release, seed=seed, nfev=res.nfev))
+
+    return p_best, offsets, cost, terms
+
+def save_progenitor_fit(kind, p, offsets, cost, terms, info):
+    """Store the fitted progenitor in output/gd1_test/progenitor.h5 (group per potential)"""
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with h5py.File(os.path.join(OUT_DIR, 'progenitor.h5'), 'a') as f:
+        if kind in f:
+            del f[kind]
+        g = f.create_group(kind)
+        g.create_dataset('w0', data=obs_from_params(p))
+        g.create_dataset('params', data=p)
+        g.attrs['param_names'] = FIT_PARAMS
+        g.attrs['phi1_prog'] = PHI1_PROG
+        g.attrs['cost'] = cost
+        for k, v in offsets.items():
+            g.attrs[k] = v
+        for k, v in terms.items():
+            g.attrs[f'cost_{k}'] = v
+        for k, v in info.items():
+            g.attrs[k] = v
+
+def load_progenitor_fit(kind):
+    """Fitted progenitor parameters and costs"""
+
+    with h5py.File(os.path.join(OUT_DIR, 'progenitor.h5'), 'r') as f:
+        g = f[kind]
+        return dict(params=dict(zip(FIT_PARAMS, g['params'][:])), w0=g['w0'][:],
+                    offsets={k: g.attrs[k] for k in OFFSET_NAMES if k in g.attrs}, attrs=dict(g.attrs))
+
+
 # Base models #
 
-def run_base(seed=532):
-    """Generate and save the base models in both the static and MW+LMC potentials"""
+# styles of the base models in comparison plots
+KIND_COLORS = dict(static='tab:blue', mwlmc='tab:red', v21='tab:blue', v21_lmc='tab:red')
+KIND_LABELS = dict(static='static MW (gala)', mwlmc='MW+LMC (streamsculptor)', v21='static MW (V21)',
+                   v21_lmc='MW+LMC (V21)')
 
-    for kind in ['static', 'mwlmc']:
-        Stream(kind).base(seed=seed)
+def run_base(seed=532, prog='fit', kinds=('v21', 'v21_lmc')):
+    """Generate and save the base models in the given potentials"""
+
+    for kind in kinds:
+        Stream(kind, prog=prog).base(seed=seed)
 
 def plot_base(save=True):
     """Static and MW+LMC base models compared with the GD-1 members"""
@@ -332,17 +633,16 @@ def track(obs, key, width=2., step=0.1, phi1_range=(-110, 40), n_min=5):
 
     return lambda x: np.interp(x, centers, medians, left=np.nan, right=np.nan)
 
-def plot_base_residuals(ref='mwlmc', save=True):
-    """Static and MW+LMC base models, GD-1 members, Hectochelle (Bonaca+2020) and DESI DR2 (Jarvis+2026) members,
+def plot_base_residuals(ref='v21_lmc', kinds=('v21', 'v21_lmc'), save=True):
+    """Base models, GD-1 members, Hectochelle (Bonaca+2020) and DESI DR2 (Jarvis+2026) members,
     relative to the smooth track of the reference model"""
 
     data = members_gd1_frame()
     spec = load_hectochelle()
     desi = load_desi()
     phi2_lim = (np.floor(np.min(spec['phi2'])*2)/2, np.ceil(np.max(spec['phi2'])*2)/2)
-    models = {kind: to_gd1_frame(load_model('base', kind)['w']) for kind in ['static', 'mwlmc']}
-    colors = dict(static='tab:blue', mwlmc='tab:red')
-    labels = dict(static='static MW', mwlmc='MW+LMC')
+    models = {kind: to_gd1_frame(load_model('base', kind)['w']) for kind in kinds}
+    colors, labels = KIND_COLORS, KIND_LABELS
 
     ylist = ['phi2', 'dist', 'pm1', 'pm2', 'vr']
     ylabels = [r'$\Delta\phi_2$ [deg]', r'$\Delta$d [kpc]', r'$\Delta\mu_{\phi_1}$ [mas/yr]',
