@@ -10,11 +10,10 @@
 #   tirpc   - build libtirpc locally, only needed when the system has no RPC headers (no sudo)
 #   nemo    - clone, configure and build NEMO and falcON
 #   python  - install requirements_nbody.txt (numpy, scipy, ..., cvxopt) into $PYTHON's environment
+#   pyanalysis - install requirements_analysis.txt (the jax stack used by agama_jax.py)
 #   agama   - clone Agama + UNSIO, build, install into $PYTHON's environment, copy the NEMO plugin
 #   verify  - solveOpt test and a gyrfalcON+Agama plugin vs agama.orbit comparison
 #   versions- write $PREFIX/nbody_stack_versions.txt
-# Optional step (not run by default):
-#   pyanalysis - install requirements_analysis.txt (the jax stack used by agama_jax.py)
 #
 # Prerequisites:
 # - A Python (tested: 3.11) with pip and its C headers (Python.h; pyenv builds include them,
@@ -250,7 +249,7 @@ step_versions() {
     cat "$f"
 }
 
-steps=${*:-check tirpc nemo python agama verify versions}
+steps=${*:-check tirpc nemo python pyanalysis agama verify versions}
 for s in $steps; do
     declare -f "step_$s" >/dev/null || die "unknown step '$s'"
     "step_$s"
