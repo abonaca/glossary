@@ -1,0 +1,12 @@
+# Optional jax analysis stack (installed by `install_nbody_stack.sh pyanalysis`).
+# Pinned to the versions in streamsculptor-env (Python 3.11).
+# jax 0.4.38 on CPU: some jitted scalar jnp.log calls segfault; agama_jax.safe_log works around it,
+# or set XLA_FLAGS=--xla_cpu_use_thunk_runtime=false.
+jax==0.4.38
+jaxlib==0.4.38
+equinox==0.11.11
+diffrax==0.7.0
+lineax==0.0.8
+optimistix==0.1.0
+jaxtyping==0.3.9
+interpax==0.3.4
