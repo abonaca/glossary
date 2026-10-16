@@ -7,3 +7,4 @@ __pycache__/
 scrap/
 output/
 data/*/raw/
+plots/tango_evolution.mp4
