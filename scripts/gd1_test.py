@@ -12,6 +12,8 @@ import os
 import subprocess
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')   # no Qt bindings in streamsculptor-env; figures are saved to plots/
 import matplotlib.pyplot as plt
 import h5py
 
@@ -181,9 +183,18 @@ def load_potential(kind='v21_lmc'):
     """Base Milky Way potential:
     'v21': static Milky Way of Vasiliev, Belokurov & Erkal (2021), computed with AGAMA
     'v21_lmc': the same Milky Way plus the moving LMC (1.5e11 Msun) and the Milky Way reflex acceleration
-    'static' (gala MilkyWayPotential) and 'mwlmc' (streamsculptor MW_LMC_Potential): earlier, mismatched pair"""
+    'static' (gala MilkyWayPotential) and 'mwlmc' (streamsculptor MW_LMC_Potential): earlier, mismatched pair
+    Tango (Vasiliev+2021 evolving Milky Way + LMC with the triaxial halo; agama_jax.py, linearly interpolated in time):
+    'tango': with Sgr (moving Plummer with the N-body mass history), without the Milky Way reflex due to Sgr
+    (consistent with the V21 N-body Sgr trajectory); 'tango_reflex': with the reflex; 'tango_nosgr': without Sgr
+    'tango_static': the unperturbed initial Milky Way of the Tango model (bulge, disk, mw00 halo)"""
 
-    if kind in ('v21', 'v21_lmc'):
+    if kind.startswith('tango'):
+        import agama_jax as aj
+        opts = dict(tango=dict(), tango_reflex=dict(sgr_reflex=True), tango_nosgr=dict(sgr=False),
+                    tango_static=dict(static=True))
+        return aj.tango_potential('triax', **opts[kind])
+    elif kind in ('v21', 'v21_lmc'):
         tab = dict(np.load(AGAMA_MWLMC_FILE))
         comps = agama_mw(tab) + (agama_lmc(tab) if kind=='v21_lmc' else [])
         return potential.Potential_Combine(comps, units=usys)
@@ -568,9 +579,11 @@ def load_progenitor_fit(kind):
 # Base models #
 
 # styles of the base models in comparison plots
-KIND_COLORS = dict(static='tab:blue', mwlmc='tab:red', v21='tab:blue', v21_lmc='tab:red')
+KIND_COLORS = dict(static='tab:blue', mwlmc='tab:red', v21='tab:blue', v21_lmc='tab:red', tango='k',
+                   tango_reflex='tab:orange', tango_nosgr='tab:green', tango_static='tab:blue')
 KIND_LABELS = dict(static='static MW (gala)', mwlmc='MW+LMC (streamsculptor)', v21='static MW (V21)',
-                   v21_lmc='MW+LMC (V21)')
+                   v21_lmc='MW+LMC (V21)', tango='Tango MW+LMC+Sgr (no reflex)', tango_reflex='Tango MW+LMC+Sgr, with Sgr reflex',
+                   tango_nosgr='Tango MW+LMC, no Sgr', tango_static='Tango initial MW (static)')
 
 def run_base(seed=532, prog='fit', kinds=('v21', 'v21_lmc')):
     """Generate and save the base models in the given potentials"""
@@ -698,5 +711,68 @@ def footprint_counts():
     for kind in ['static', 'mwlmc']:
         m = to_gd1_frame(load_model('base', kind)['w'])
         out[kind] = int(np.sum((m['phi1']>=phi1_min) & (m['phi1']<=phi1_max)))
+
+    return out
+
+
+# Sgr in the Tango potential #
+
+SGR_TEST_KINDS = ('tango', 'tango_reflex', 'tango_nosgr')
+
+def run_sgr_test(prog_kind='v21', seed=532, kinds=SGR_TEST_KINDS):
+    """GD-1 in the Tango potential with Sgr (no reflex), Sgr with its reflex, and no Sgr, all from the same present-day
+    progenitor (the fit in prog_kind), so that differences isolate the effect of Sgr.
+    Saved to output/gd1_test/sgr_test.h5. Returns run times [s]"""
+
+    import time
+    prog_w0 = progenitor(prog_kind)
+    times = {}
+    for kind in kinds:
+        t0 = time.time()
+        s = Stream(kind, prog=prog_w0)
+        model = s.generate(seed=seed)
+        model['meta']['progenitor_fit'] = prog_kind
+        save_model(model, name='sgr_test', group=kind)
+        times[kind] = time.time() - t0
+        print(f'{kind}: {times[kind]:.0f} s')
+    return times
+
+def plot_track_differences(name='sgr_test', ref='tango', kinds=SGR_TEST_KINDS, phi1_range=(-90, 10), save=True):
+    """Differences between the smooth tracks of models stored in output/gd1_test/<name>.h5 and the reference model,
+    compared with the intrinsic widths assumed in the fit (INTRINSIC). Returns the max |difference| per observable
+    within phi1_range"""
+
+    models = {kind: to_gd1_frame(load_model(name, kind)['w']) for kind in kinds}
+    ylist = ['phi2', 'dist', 'pm1', 'pm2', 'vr']
+    ylabels = [r'$\Delta\phi_2$ [deg]', r'$\Delta$d [kpc]', r'$\Delta\mu_{\phi_1}$ [mas/yr]',
+               r'$\Delta\mu_{\phi_2}$ [mas/yr]', r'$\Delta V_r$ [km/s]']
+    phi1 = np.arange(phi1_range[0], phi1_range[1] + 0.05, 0.1)
+
+    fig, ax = plt.subplots(len(ylist), 1, figsize=(9,10), sharex=True)
+    out = {}
+    for i, (k, label) in enumerate(zip(ylist, ylabels)):
+        plt.sca(ax[i])
+        ref_track = track(models[ref], k)(phi1)
+        for kind in kinds:
+            if kind == ref:
+                continue
+            dy = track(models[kind], k)(phi1) - ref_track
+            out[(kind, k)] = np.nanmax(np.abs(dy))
+            plt.plot(phi1, dy, '-', color=KIND_COLORS[kind], lw=1.5, label=KIND_LABELS[kind] if i==0 else None)
+        if k in INTRINSIC and INTRINSIC[k] > 0:
+            plt.axhspan(-INTRINSIC[k], INTRINSIC[k], color='0.9', zorder=0,
+                        label='intrinsic width in the fit' if i==0 else None)
+        plt.axhline(0, color='0.5', lw=0.5)
+        plt.ylabel(label)
+
+    ax[0].set_title(f'relative to: {KIND_LABELS[ref]}', fontsize='medium')
+    ax[0].legend(loc='best', fontsize='small')
+    plt.xlim(*phi1_range)
+    plt.xlabel(r'$\phi_1$ [deg]')
+    plt.tight_layout(h_pad=0)
+
+    if save:
+        os.makedirs(PLOT_DIR, exist_ok=True)
+        plt.savefig(os.path.join(PLOT_DIR, f'gd1_test_{name}_tracks.png'), dpi=150)
 
     return out
