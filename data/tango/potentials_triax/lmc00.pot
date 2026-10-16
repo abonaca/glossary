@@ -1,0 +1,7 @@
+[potential]
+type=spheroid
+mass=645000
+scaleradius=10.8395
+outercutoffradius=108.395
+gamma=1
+beta=3
