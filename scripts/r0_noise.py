@@ -160,24 +160,29 @@ def analyse_r0(evol, times=None, every=4, seed=0, npershell=400):
 
 
 def plot_noise(res, fname=os.path.join(ROOT, 'plots', 'r0_noise.png')):
-    """Noise and drift of R0's expansions against V21's LMC-induced halo deformation, per radial shell."""
+    """
+    Noise and change since t0 of R0's expansions against V21's LMC-induced halo deformation, per
+    radial shell. Every curve is a force difference between two expansions, |F_a - F_b| / |F_MW|.
+    """
     import matplotlib.pyplot as plt
     nsh = len(res['shells']) - 1
     fig, axes = plt.subplots(2, (nsh + 1) // 2, figsize=(4 * ((nsh + 1) // 2), 6.5), sharex=True)
     for i, ax in enumerate(axes.flat[:nsh]):
-        ax.semilogy(res['times'], res['noise_halo'][:, i], 'k-', label='halo noise (half-split)')
-        ax.semilogy(res['times'], res['noise_disk'][:, i], 'b-', label='disk+bulge noise')
-        ax.semilogy(res['times'][1:], res['drift_halo'][1:, i], 'k--', label='halo drift since t0')
-        ax.semilogy(res['times'][1:], res['drift_disk'][1:, i], 'b--', label='disk drift since t0')
-        ax.semilogy(res['v21_times'][1:], res['v21_signal'][1:, i], 'r-', label='V21 halo: mwNN - mw00')
+        ax.semilogy(res['times'], res['noise_halo'][:, i], 'k-', label='halo: noise (half-split)')
+        ax.semilogy(res['times'], res['noise_disk'][:, i], 'b-', label='disk+bulge: noise (half-split)')
+        ax.semilogy(res['times'][1:], res['drift_halo'][1:, i], 'k--', label='halo: change since t0')
+        ax.semilogy(res['times'][1:], res['drift_disk'][1:, i], 'b--', label='disk+bulge: change since t0')
+        ax.semilogy(res['v21_times'][1:], res['v21_signal'][1:, i], 'r-', label='V21 halo (MW+LMC): change since mw00')
         ax.set_title('%g-%g kpc' % (res['shells'][i], res['shells'][i + 1]))
     for ax in axes.flat[nsh:]:
         ax.axis('off')
     for ax in axes[-1]:
         ax.set_xlabel('t [kpc/(km/s)]')
     for ax in axes[:, 0]:
-        ax.set_ylabel(r'median $|\Delta F| / |F_{\rm MW}|$')
+        ax.set_ylabel(r'median $|F_a - F_b| / |F_{\rm MW}|$')
     axes.flat[0].legend(fontsize=7)
+    fig.suptitle('Every curve is the force difference between two expansions, as a fraction of the total MW force',
+                 fontsize=11)
     fig.tight_layout()
     fig.savefig(fname, dpi=120)
     print('saved', fname)
