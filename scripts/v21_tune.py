@@ -129,31 +129,36 @@ def median_centre(xv, guess, radius=5., niter=20):
     return c, np.median(xv[sel, 3:6], axis=0), int(sel.sum())
 
 
-def track_centres(evol, comps, theta):
+def track_centres(evol, comps, theta, r_member_lmc=10., r_member_sgr=5.):
     """
-    Centres of the Milky Way (stars), LMC and Sgr in every snapshot of a run. Each search starts at
-    the previous centre advanced by v dt. Returns dict of arrays (time, 6) plus Sgr bound-star counts.
+    Centres of the Milky Way (stars), LMC and Sgr in every snapshot of a run. The Milky Way search
+    starts at its previous centre; the LMC and Sgr searches start at the current median position of
+    the particles that were within r_member of their previous centre (snapshots keep particle order).
+    The first snapshot starts from theta. Returns dict of arrays (time, 6) plus Sgr bound-star counts.
     """
     times = rn.snapshot_times(evol)
     out = dict(times=times, mw=[], lmc=[], sgr=[], sgr_n=[])
-    mw_g, lmc_g, sgr_g = np.zeros(6), np.array(theta[:6]), np.array(theta[6:])
-    tprev = times[0]
+    mw_g, lmc_mem, sgr_mem = np.zeros(3), None, None
+    nst = vi.MW_COUNTS['nbody_stars']
     for t in times:
         xv, m = rn.read_snapshot(evol, t)
-        dt = t - tprev
-        a, b = comps['mw']
-        c, v = shrinking_centre(xv[a:a + vi.MW_COUNTS['nbody_stars']], m[a:a + vi.MW_COUNTS['nbody_stars']],
-                                mw_g[:3] + mw_g[3:] * dt)
-        mw_g = np.hstack((c, v))
+        a = comps['mw'][0]
+        c, v = shrinking_centre(xv[a:a + nst], m[a:a + nst], mw_g)
+        mw_g = c
+        out['mw'].append(np.hstack((c, v)))
         a, b = comps['lmc']
-        c, v = shrinking_centre(xv[a:b], m[a:b], lmc_g[:3] + lmc_g[3:] * dt, r_start=20.)
-        lmc_g = np.hstack((c, v))
-        a, b = comps['sgr']
-        c, v, n = median_centre(xv[a:a + NSGR_STARS], sgr_g[:3] + sgr_g[3:] * dt)
-        sgr_g = np.hstack((c, v))
-        for key, val in (('mw', mw_g), ('lmc', lmc_g), ('sgr', sgr_g), ('sgr_n', n)):
-            out[key].append(val)
-        tprev = t
+        x = xv[a:b]
+        g = theta[:3] if lmc_mem is None else np.median(x[lmc_mem, :3], axis=0)
+        c, v = shrinking_centre(x, m[a:b], g, r_start=20.)
+        lmc_mem = np.sum((x[:, :3] - c)**2, axis=1) < r_member_lmc**2
+        out['lmc'].append(np.hstack((c, v)))
+        a = comps['sgr'][0]
+        x = xv[a:a + NSGR_STARS]
+        g = theta[6:9] if sgr_mem is None else np.median(x[sgr_mem, :3], axis=0)
+        c, v, n = median_centre(x, g, radius=r_member_sgr)
+        sgr_mem = np.sum((x[:, :3] - c)**2, axis=1) < r_member_sgr**2
+        out['sgr'].append(np.hstack((c, v)))
+        out['sgr_n'].append(n)
     for key in ('mw', 'lmc', 'sgr', 'sgr_n'):
         out[key] = np.array(out[key])
     return out
