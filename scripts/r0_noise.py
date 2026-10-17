@@ -179,10 +179,8 @@ def plot_noise(res, fname=os.path.join(ROOT, 'plots', 'r0_noise.png')):
     for ax in axes[-1]:
         ax.set_xlabel('t [kpc/(km/s)]')
     for ax in axes[:, 0]:
-        ax.set_ylabel(r'median $|F_a - F_b| / |F_{\rm MW}|$')
+        ax.set_ylabel(r'median $|\Delta F| / |F_{\rm MW}|$')
     axes.flat[0].legend(fontsize=7)
-    fig.suptitle('Every curve is the force difference between two expansions, as a fraction of the total MW force',
-                 fontsize=11)
     fig.tight_layout()
     fig.savefig(fname, dpi=120)
     print('saved', fname)
