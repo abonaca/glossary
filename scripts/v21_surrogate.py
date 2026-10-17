@@ -18,6 +18,10 @@ Usage:
     p = vs.calibrate(tr)                       # Coulomb logarithms
     vs.validate(tr, p)                         # endpoints and Jacobian vs the live runs
     theta = vs.solve(p)                        # surrogate initial conditions reaching TARGET
+    theta = vs.restricted_start(tr)            # preferred: LMC time delay + restricted Sgr solve
+
+The rigid three-body model misses the halo response near the LMC pericentre (LMC 8 kpc off by
+t=-0.5 in round 0), so starting guesses use restricted_start instead.
 """
 import os
 import json
@@ -247,3 +251,85 @@ def delayed_theta(theta, dt_lmc, dt_sgr, p, sgr_mass):
     lmc = solve_ivp(two_body, (0, -dt_lmc), theta[:6], rtol=1e-10, atol=1e-10).y[:, -1]
     s = solve_ivp(sgr, (0, -dt_sgr), theta[6:], rtol=1e-10, atol=1e-10).y[:, -1]
     return np.concatenate((lmc, s))
+
+
+# ------------------------------------------------------------------------- restricted Sgr model
+# Sgr as a test body (with friction and its own MW reflex) in the rigid MW and LMC potentials moving
+# along a live round's MW and LMC tracks, optionally delayed. The live MW track contains the MW's
+# reflex to Sgr; it is removed (sgr_reflex) and recomputed along the model's Sgr orbit, otherwise a
+# delayed MW track wobbles out of phase with Sgr.
+def sgr_reflex(tr, run):
+    """MW reflex (position, velocity; from rest at T_START) to the live Sgr of a run, Plummer of its bound mass."""
+    from scipy.interpolate import CubicHermiteSpline
+    rel = run['sgr'] - run['mw']
+    x = CubicHermiteSpline(run['times'], rel[:, :3], rel[:, 3:])
+    m = lambda t: np.interp(t, tr['sgr_t'], tr['sgr_m'])
+    f = lambda t, w: np.hstack((w[3:], m(t) * x(t) / (np.sum(x(t)**2) + SGR_PLUMMER**2)**1.5))
+    return solve_ivp(f, (vt.T_START, vt.T_END), np.zeros(6), t_eval=run['times'], rtol=1e-9, atol=1e-9).y.T
+
+
+def drivers(tr, run, delay=0.):
+    """
+    Splines of the MW (Sgr reflex removed) and LMC absolute tracks of a live run, delayed by `delay`;
+    before the run's start both follow the rigid two-body orbit backwards. With delay > 0 the frame
+    is shifted so that the MW starts at rest at the origin.
+    """
+    from scipy.interpolate import CubicHermiteSpline
+    t = run['times'] + delay
+    mw, lmc = run['mw'] - sgr_reflex(tr, run), run['lmc'].copy()
+    if delay > 0:
+        def two(tt, w):
+            xm, vm, xl, vl = w[:3], w[3:6], w[6:9], w[9:]
+            return np.concatenate((vm, _lmc.force(xm - xl), vl, _mw.force(xl - xm)))
+        tb = np.linspace(vt.T_START + delay, vt.T_START, 9)
+        w = solve_ivp(two, (tb[0], tb[-1]), np.concatenate((mw[0], lmc[0])), t_eval=tb,
+                      rtol=1e-10, atol=1e-10).y.T[::-1][:-1]
+        t = np.concatenate((tb[::-1][:-1], t))
+        mw, lmc = np.vstack((w[:, :6], mw)), np.vstack((w[:, 6:], lmc))
+        mw0, dt = mw[0].copy(), t - t[0]
+        for a in (mw, lmc):
+            a[:, :3] -= mw0[:3] + mw0[3:] * dt[:, None]
+            a[:, 3:] -= mw0[3:]
+    return [CubicHermiteSpline(t, a[:, :3], a[:, 3:]) for a in (mw, lmc)]
+
+
+def sgr_restricted(tr, th_sgr, drv, t_eval, mass_delay=0., lnL=3.):
+    """Sgr phase-space coordinates relative to the MW centre (driver + Sgr reflex) at t_eval."""
+    xb, xl = drv
+    vb = xb.derivative()
+    m = lambda t: np.interp(t - mass_delay, tr['sgr_t'], tr['sgr_m'])
+
+    def rhs(t, w):
+        x, v, R, VR = w[:3], w[3:6], w[6:9], w[9:]
+        d = x - xb(t) - R
+        ms = m(t)
+        return np.hstack((v, _mw.force(d) + _lmc.force(x - xl(t)) + _friction(d, v - vb(t) - VR, ms, lnL),
+                          VR, ms * d / (np.sum(d**2) + SGR_PLUMMER**2)**1.5))
+    w0 = np.hstack((th_sgr + np.hstack((xb(vt.T_START), vb(vt.T_START))), np.zeros(6)))
+    w = solve_ivp(rhs, (vt.T_START, t_eval[-1]), w0, t_eval=t_eval, rtol=1e-9, atol=1e-8,
+                  method='DOP853').y.T
+    return w[:, :6] - np.hstack((xb(t_eval), vb(t_eval))) - w[:, 6:]
+
+
+def restricted_start(tr, lnL=3.):
+    """
+    Starting guess from a live round: LMC delayed onto its target (best_delay + two-body backward
+    integration); Sgr solved in the restricted model driven by the delayed MW/LMC tracks, with the
+    model's error on the round's base run subtracted from the target.
+    """
+    info, base = tr['info'], tr['runs'][0]
+    th0 = np.array(info['theta'])
+    d = best_delay(tr)
+    DL, DS = -d['lmc'][0], -d['sgr'][0]
+    th = delayed_theta(th0, DL, DS, dict(lnL_sgr=lnL), tr['sgr_m'][0])
+    ends = np.array([vt.T_START, vt.T_END])
+    offset = sgr_restricted(tr, th0[6:], drivers(tr, base), ends, lnL=lnL)[-1] - _live_rel(base)[-1, 6:]
+    drv = drivers(tr, base, delay=DL)
+    W = 1 / vt.TOL[6:]
+    f = lambda s: (sgr_restricted(tr, s, drv, ends, mass_delay=DS, lnL=lnL)[-1] - offset - vt.TARGET[6:]) * W
+    print('delays: LMC %.3f, Sgr %.3f; Sgr-delay-only start, predicted resid/TOL %s' %
+          (DL, DS, np.array2string(f(th[6:]), precision=1)))
+    res = least_squares(f, th[6:], x_scale=np.array([1, 1, 1, 10, 10, 10.]), diff_step=1e-4)
+    print('restricted solve: predicted resid/TOL %s' % np.array2string(res.fun, precision=1))
+    th[6:] = res.x
+    return th
