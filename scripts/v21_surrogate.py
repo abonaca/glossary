@@ -209,3 +209,41 @@ def solve(p, tr, theta0=None, offset=None, niter=10):
     np.set_printoptions(precision=3, suppress=True, linewidth=200)
     print('theta = %s\nshift from start = %s' % (theta, theta - np.array(tr['info']['theta'])))
     return theta
+
+
+# ------------------------------------------------------------------------------------ time delays
+def best_delay(tr, i=0, taus=np.arange(-0.4, 1e-4, 0.002)):
+    """
+    Times tau at which the live LMC and Sgr tracks of run i come closest to TARGET (chi^2 in units
+    of TOL, cubic Hermite interpolation between snapshots). Returns {'lmc': (tau, resid/TOL), 'sgr': ...}.
+    """
+    from scipy.interpolate import CubicHermiteSpline
+    run = tr['runs'][i]
+    t, rel = run['times'], _live_rel(run)
+    out = {}
+    for name, s in (('lmc', 0), ('sgr', 6)):
+        x = CubicHermiteSpline(t, rel[:, s:s + 3], rel[:, s + 3:s + 6])
+        v = CubicHermiteSpline(t, rel[:, s + 3:s + 6], np.gradient(rel[:, s + 3:s + 6], t, axis=0))
+        chi = (np.hstack((x(taus), v(taus))) - vt.TARGET[s:s + 6]) / vt.TOL[s:s + 6]
+        j = np.argmin(np.sum(chi**2, axis=1))
+        out[name] = (taus[j], chi[j])
+    return out
+
+
+def delayed_theta(theta, dt_lmc, dt_sgr, p, sgr_mass):
+    """
+    Start each body earlier on its own orbit: the LMC is integrated backward by dt_lmc (>0) in the
+    rigid MW+LMC two-body problem (which the live runs follow at these distances), Sgr backward by
+    dt_sgr in the rigid MW with friction (lnL_sgr, constant mass sgr_mass). Relative coordinates.
+    """
+    theta = np.asarray(theta, float)
+
+    def two_body(t, w):
+        r = w[:3]
+        return np.hstack((w[3:], _mw.force(r) - _lmc.force(-r)))
+
+    def sgr(t, w):
+        return np.hstack((w[3:], _mw.force(w[:3]) + _friction(w[:3], w[3:], sgr_mass, p['lnL_sgr'])))
+    lmc = solve_ivp(two_body, (0, -dt_lmc), theta[:6], rtol=1e-10, atol=1e-10).y[:, -1]
+    s = solve_ivp(sgr, (0, -dt_sgr), theta[6:], rtol=1e-10, atol=1e-10).y[:, -1]
+    return np.concatenate((lmc, s))
