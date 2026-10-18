@@ -38,6 +38,7 @@ agama.setUnits(length=1, velocity=1, mass=232500)
 POT = os.path.join(vi.ROOT, 'data', 'tango', 'potentials_triax')
 LOCAL_TRACKS = os.path.join(vi.ROOT, 'output', 'v21_sim', 'tune')   # local copies of centres/sgr_mass
 SIGMA = 120.          # MW velocity dispersion in the friction formula (V21)
+SIGMA_PROFILE = None  # optional (r, sigma_1D(r)) of the MW halo; replaces SIGMA (set_sigma_profile)
 SGR_PLUMMER = 2.      # scale radius of the Sgr potential acting on the MW [kpc]
 
 _halo = agama.Potential(os.path.join(POT, 'mw00.pot'))
@@ -74,12 +75,38 @@ def load_tracks(k, d=None):
 
 
 # ------------------------------------------------------------------------------------ the model
+def halo_sigma_profile(snapshot=os.path.join(vi.ROOT, 'output', 'v21_sim', 'ics', 'mw_triax_full', 'mw_halo.nemo'),
+                       edges=(2, 5, 7.5, 10, 12.5, 15, 17.5, 20, 25, 30, 40, 50, 60, 70, 80, 100, 130, 170, 220)):
+    """1D velocity dispersion of the MW halo particles in spherical shells (mass-weighted)."""
+    xv, m = agama.readSnapshot(snapshot)
+    r = np.linalg.norm(xv[:, :3], axis=1)
+    mid, sig = [], []
+    for a, b in zip(edges[:-1], edges[1:]):
+        s = (r > a) & (r < b)
+        v = xv[s, 3:] - np.average(xv[s, 3:], axis=0, weights=m[s])
+        mid.append(0.5 * (a + b))
+        sig.append(np.sqrt(np.average(np.sum(v**2, axis=1), weights=m[s]) / 3))
+    return np.array(mid), np.array(sig)
+
+
+def set_sigma_profile(profile):
+    """Use sigma(r) (tuple of arrays, e.g. from halo_sigma_profile) in the friction; None = fixed SIGMA."""
+    global SIGMA_PROFILE
+    SIGMA_PROFILE = profile
+
+
+def _sigma(dx):
+    if SIGMA_PROFILE is None or dx is None:
+        return SIGMA
+    return np.interp(np.linalg.norm(dx), *SIGMA_PROFILE)
+
+
 def _friction(dx, dv, mass, lnL):
     """Chandrasekhar acceleration (V21 eq. 2) on a body of `mass` at dx, dv relative to the MW."""
     v = np.linalg.norm(dv)
     if lnL == 0 or v == 0:
         return np.zeros(3)
-    X = v / (np.sqrt(2) * SIGMA)
+    X = v / (np.sqrt(2) * _sigma(dx))
     rho = _halo.density(dx)
     return -4 * np.pi * rho * lnL * mass * dv / v**3 * (
         math.erf(X) - 2 / np.sqrt(np.pi) * X * np.exp(-X**2))
@@ -399,9 +426,9 @@ class EvolvingField:
         return (1 - w) * self.halo[j].density(d) + w * self.halo[j + 1].density(d)
 
 
-def _friction_rho(rho, dv, mass, lnL):
+def _friction_rho(rho, dv, mass, lnL, dx=None):
     v = np.linalg.norm(dv)
-    X = v / (np.sqrt(2) * SIGMA)
+    X = v / (np.sqrt(2) * _sigma(dx))
     return -4 * np.pi * rho * lnL * mass * dv / v**3 * (math.erf(X) - 2 / np.sqrt(np.pi) * X * np.exp(-X**2))
 
 
@@ -423,7 +450,7 @@ def sgr_evolving(ev, tr, run, th_sgr, t_eval, lnL=3., t0=vt.T_START, w0=None):
         vm = vm_live(t) - R_live.derivative()(t) + VR
         d = x - xm
         ms = m(t)
-        a = ev.force(x, t, xm) + _friction_rho(ev.halo_density(d, t), v - vm, ms, lnL)
+        a = ev.force(x, t, xm) + _friction_rho(ev.halo_density(d, t), v - vm, ms, lnL, d)
         return np.hstack((v, a, VR, ms * d / (np.sum(d**2) + SGR_PLUMMER**2)**1.5))
     if w0 is None:
         w0 = np.hstack((th_sgr + np.hstack((ev.xm(t0), vm_live(t0))), np.zeros(6)))
