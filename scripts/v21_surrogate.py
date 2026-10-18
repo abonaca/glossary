@@ -333,3 +333,183 @@ def restricted_start(tr, lnL=3.):
     print('restricted solve: predicted resid/TOL %s' % np.array2string(res.fun, precision=1))
     th[6:] = res.x
     return th
+
+
+# ------------------------------------------------------------------- evolving-field Sgr model
+# The MW (halo: Multipole, disk+bulge: CylSpline, about the live MW centre) and the LMC (Multipole,
+# about the live LMC centre) fitted to every snapshot of a live run, Sgr particles excluded. Between
+# snapshots the centres follow the live tracks (cubic Hermite) and the shapes are interpolated
+# linearly; Sgr moves in these fields as a test body with friction and its own MW reflex (as in
+# sgr_restricted), so a changed Sgr orbit moves the MW centre consistently.
+LMC_EXP = dict(type='Multipole', lmax=4, symmetry='n', gridSizeR=25, rmin=0.2, rmax=300.)
+
+
+def expansion_dir(k, i=0):
+    return os.path.join(vt.run_dir(k, i), 'expansions')
+
+
+def build_expansions(k, i=0):
+    """On OBS: expansions of every snapshot of run i of round k -> runKK/expansions/{halo,disk,lmc}_JJ.coef."""
+    comps = json.load(open(vt.BASE_ICS + '.json'))['components']
+    evol = os.path.join(vt.run_dir(k, i), 'evol.nemo')
+    tr = np.load(os.path.join(vt.run_dir(k, i), 'centres.npz'))
+    d = expansion_dir(k, i)
+    os.makedirs(d, exist_ok=True)
+    nst = vi.MW_COUNTS['nbody_stars']
+    (a, b), (la, lb) = comps['mw'], comps['lmc']
+    for j, t in enumerate(tr['times']):
+        xv, m = rn.read_snapshot(evol, t)
+        x = xv[a:b, :3] - tr['mw'][j, :3]
+        agama.Potential(particles=(x[nst:], m[a + nst:b]), **rn.HALO_EXP).export(os.path.join(d, 'halo_%02d.coef' % j))
+        agama.Potential(particles=(x[:nst], m[a:a + nst]), **rn.DISK_EXP).export(os.path.join(d, 'disk_%02d.coef' % j))
+        agama.Potential(particles=(xv[la:lb, :3] - tr['lmc'][j, :3], m[la:lb]), **LMC_EXP).export(
+            os.path.join(d, 'lmc_%02d.coef' % j))
+        print('t = %6.3f expansions done' % t, flush=True)
+    np.save(os.path.join(d, 'times.npy'), tr['times'])
+    return d
+
+
+class EvolvingField:
+    """Time-interpolated MW and LMC fields of a live run (expansions from build_expansions)."""
+
+    def __init__(self, d, run):
+        from scipy.interpolate import CubicHermiteSpline
+        self.times = np.load(os.path.join(d, 'times.npy'))
+        n = len(self.times)
+        self.mw = [agama.Potential(os.path.join(d, 'halo_%02d.coef' % j), os.path.join(d, 'disk_%02d.coef' % j))
+                   for j in range(n)]
+        self.halo = [agama.Potential(os.path.join(d, 'halo_%02d.coef' % j)) for j in range(n)]
+        self.lmc = [agama.Potential(os.path.join(d, 'lmc_%02d.coef' % j)) for j in range(n)]
+        self.xm = CubicHermiteSpline(run['times'], run['mw'][:, :3], run['mw'][:, 3:])
+        self.xl = CubicHermiteSpline(run['times'], run['lmc'][:, :3], run['lmc'][:, 3:])
+
+    def _w(self, t):
+        j = int(np.clip(np.searchsorted(self.times, t) - 1, 0, len(self.times) - 2))
+        return j, (t - self.times[j]) / (self.times[j + 1] - self.times[j])
+
+    def force(self, x, t, xm):
+        """Acceleration at absolute x for an MW centre at xm (the LMC follows its live track)."""
+        j, w = self._w(t)
+        dm, dl = x - xm, x - self.xl(t)
+        return ((1 - w) * (self.mw[j].force(dm) + self.lmc[j].force(dl)) +
+                w * (self.mw[j + 1].force(dm) + self.lmc[j + 1].force(dl)))
+
+    def halo_density(self, d, t):
+        j, w = self._w(t)
+        return (1 - w) * self.halo[j].density(d) + w * self.halo[j + 1].density(d)
+
+
+def _friction_rho(rho, dv, mass, lnL):
+    v = np.linalg.norm(dv)
+    X = v / (np.sqrt(2) * SIGMA)
+    return -4 * np.pi * rho * lnL * mass * dv / v**3 * (math.erf(X) - 2 / np.sqrt(np.pi) * X * np.exp(-X**2))
+
+
+def sgr_evolving(ev, tr, run, th_sgr, t_eval, lnL=3., t0=vt.T_START, w0=None):
+    """
+    Sgr relative to the MW centre at t_eval, in the evolving field of `run`. The MW centre is the live
+    track minus the live Sgr reflex plus the reflex to the model Sgr. Starts from th_sgr (relative,
+    at T_START) or from an absolute Sgr state w0 at t0 (then the reflex starts at its live value).
+    """
+    from scipy.interpolate import CubicHermiteSpline
+    Rl = sgr_reflex(tr, run)
+    R_live = CubicHermiteSpline(run['times'], Rl[:, :3], Rl[:, 3:])
+    vm_live = ev.xm.derivative()
+    m = lambda t: np.interp(t, tr['sgr_t'], tr['sgr_m'])
+
+    def rhs(t, w):
+        x, v, R, VR = w[:3], w[3:6], w[6:9], w[9:]
+        xm = ev.xm(t) - R_live(t) + R
+        vm = vm_live(t) - R_live.derivative()(t) + VR
+        d = x - xm
+        ms = m(t)
+        a = ev.force(x, t, xm) + _friction_rho(ev.halo_density(d, t), v - vm, ms, lnL)
+        return np.hstack((v, a, VR, ms * d / (np.sum(d**2) + SGR_PLUMMER**2)**1.5))
+    if w0 is None:
+        w0 = np.hstack((th_sgr + np.hstack((ev.xm(t0), vm_live(t0))), np.zeros(6)))
+    else:
+        w0 = np.hstack((w0, R_live(t0), R_live.derivative()(t0)))
+    t_eval = np.atleast_1d(t_eval)
+    sol = solve_ivp(rhs, (t0, t_eval[-1] if t_eval[-1] != t0 else t_eval[0]), w0, t_eval=t_eval,
+                    rtol=1e-9, atol=1e-8, method='DOP853')
+    w = sol.y.T
+    xm = ev.xm(sol.t) - R_live(sol.t) + w[:, 6:9]
+    vm = vm_live(sol.t) - R_live.derivative()(sol.t) + w[:, 9:]
+    return w[:, :6] - np.hstack((xm, vm))
+
+
+def validate_evolving(ev, tr, lnL=3.):
+    """Evolving-field Sgr vs the live round: base-run track and the Sgr block of the Jacobian."""
+    np.set_printoptions(precision=2, suppress=True, linewidth=200)
+    info, base = tr['info'], tr['runs'][0]
+    ts = base['times']
+    a = sgr_evolving(ev, tr, base, np.array(info['theta'][6:]), ts, lnL)
+    live = _live_rel(base)[:, 6:]
+    print('   t   |dx| |dv|   (evolving model - live, base run)')
+    for j in range(0, len(ts), 2):
+        print('%6.3f %5.2f %6.2f' % (ts[j], np.linalg.norm(a[j, :3] - live[j, :3]), np.linalg.norm(a[j, 3:] - live[j, 3:])))
+    Jm, Jl = [], []
+    for i in range(7, 13):
+        run, dl = tr['runs'][i], info['delta'][i - 1]
+        Jm.append((sgr_evolving(ev, tr, base, run_theta(info, i)[6:], ts[-1:], lnL)[-1] - a[-1]) / dl)
+        Jl.append((_live_rel(run)[-1, 6:] - live[-1]) / dl)
+    Jm, Jl = np.array(Jm).T, np.array(Jl).T
+    W = 1 / vt.TOL[6:]
+    print('Sgr Jacobian column error (TOL-weighted):',
+          np.linalg.norm(W[:, None] * (Jm - Jl), axis=0) / np.linalg.norm(W[:, None] * Jl, axis=0))
+    print('endpoint (model - live)/TOL:', (a[-1] - live[-1]) * W)
+    return a[-1] - live[-1], Jm, Jl
+
+
+def evolving_start(ev, tr, theta_lmc, sgr_guess, offset, lnL=3.):
+    """Sgr start reaching TARGET - offset in the evolving field (offset = model - live at the round's theta)."""
+    base = tr['runs'][0]
+    W = 1 / vt.TOL[6:]
+    f = lambda s: (sgr_evolving(ev, tr, base, s, [vt.T_END], lnL)[-1] - offset - vt.TARGET[6:]) * W
+    print('guess: predicted resid/TOL %s' % np.array2string(f(sgr_guess), precision=1))
+    res = least_squares(f, sgr_guess, x_scale=np.array([0.1, 0.1, 0.1, 1, 1, 1.]), diff_step=1e-5)
+    print('evolving-field solve: predicted resid/TOL %s' % np.array2string(res.fun, precision=1))
+    return np.concatenate((theta_lmc, res.x))
+
+
+def plot_orbits(ev, tr, starts, sgr_theta, fout, lnL=3.):
+    """
+    Sgr orbit from sgr_theta in the evolving field and the live LMC track of the round's base run,
+    MW-centred (Galactocentric) x-y, x-z, y-z; starting points (t=-3) of each theta in `starts`
+    ({label: theta}); present-day targets. Top row: Sgr scale; bottom row: full LMC scale.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    base = tr['runs'][0]
+    ts = np.linspace(vt.T_START, vt.T_END, 3001)
+    sgr = sgr_evolving(ev, tr, base, np.asarray(sgr_theta), ts, lnL)
+    lmc = _live_rel(base)[:, :6]
+    from scipy.interpolate import CubicHermiteSpline
+    lmc = CubicHermiteSpline(base['times'], lmc[:, :3], lmc[:, 3:])(ts)
+    pairs = [(0, 1), (0, 2), (1, 2)]
+    lab = 'xyz'
+    marks = ['o', 's', '^', 'D', 'v']
+    with plt.style.context('default'):
+        fig, axes = plt.subplots(2, 3, figsize=(13, 8.6))
+        for row, lim in ((0, 90), (1, 400)):
+            for ax, (p, q) in zip(axes[row], pairs):
+                ax.plot(sgr[:, p], sgr[:, q], '-', color='tab:red', lw=0.8, label='Sgr (evolving-field model)')
+                ax.plot(lmc[:, p], lmc[:, q], '-', color='tab:blue', lw=1.2, label='LMC (round %d live)' % tr['info']['round'])
+                ax.plot(0, 0, '+', color='k', ms=10)
+                for (name, th), mk in zip(starts.items(), marks):
+                    for s, c in ((6, 'tab:red'), (0, 'tab:blue')):
+                        ax.plot(th[s + p], th[s + q], mk, mfc='none', mec=c, ms=7, label=name if s == 6 else None)
+                for s, c in ((6, 'tab:red'), (0, 'tab:blue')):
+                    ax.plot(vt.TARGET[s + p], vt.TARGET[s + q], '*', color=c, ms=12,
+                            label='present day (target)' if s == 6 else None)
+                ax.set_xlim(-lim, lim)
+                ax.set_ylim(-lim, lim)
+                ax.set_aspect('equal')
+                ax.set_xlabel('%s [kpc]' % lab[p])
+                ax.set_ylabel('%s [kpc]' % lab[q])
+        h, l = axes[0, 0].get_legend_handles_labels()
+        fig.legend(h, l, loc='upper center', ncol=4, frameon=False, fontsize='small')
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        fig.savefig(fout, dpi=150)
+    print('saved', fout)
