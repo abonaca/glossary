@@ -376,9 +376,9 @@ class EvolvingField:
         from scipy.interpolate import CubicHermiteSpline
         self.times = np.load(os.path.join(d, 'times.npy'))
         n = len(self.times)
-        self.mw = [agama.Potential(os.path.join(d, 'halo_%02d.coef' % j), os.path.join(d, 'disk_%02d.coef' % j))
-                   for j in range(n)]
         self.halo = [agama.Potential(os.path.join(d, 'halo_%02d.coef' % j)) for j in range(n)]
+        self.mw = [agama.Potential(self.halo[j], agama.Potential(os.path.join(d, 'disk_%02d.coef' % j)))
+                   for j in range(n)]
         self.lmc = [agama.Potential(os.path.join(d, 'lmc_%02d.coef' % j)) for j in range(n)]
         self.xm = CubicHermiteSpline(run['times'], run['mw'][:, :3], run['mw'][:, 3:])
         self.xl = CubicHermiteSpline(run['times'], run['lmc'][:, :3], run['lmc'][:, 3:])
@@ -476,7 +476,7 @@ def plot_orbits(ev, tr, starts, sgr_theta, fout, lnL=3.):
     """
     Sgr orbit from sgr_theta in the evolving field and the live LMC track of the round's base run,
     MW-centred (Galactocentric) x-y, x-z, y-z; starting points (t=-3) of each theta in `starts`
-    ({label: theta}); present-day targets. Top row: Sgr scale; bottom row: full LMC scale.
+    ({label: theta}); present-day targets. Rows: Sgr scale, full LMC scale, zoom on the Sgr starts.
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -491,7 +491,7 @@ def plot_orbits(ev, tr, starts, sgr_theta, fout, lnL=3.):
     lab = 'xyz'
     marks = ['o', 's', '^', 'D', 'v']
     with plt.style.context('default'):
-        fig, axes = plt.subplots(2, 3, figsize=(13, 8.6))
+        fig, axes = plt.subplots(3, 3, figsize=(13, 13))
         for row, lim in ((0, 90), (1, 400)):
             for ax, (p, q) in zip(axes[row], pairs):
                 ax.plot(sgr[:, p], sgr[:, q], '-', color='tab:red', lw=0.8, label='Sgr (evolving-field model)')
@@ -508,8 +508,22 @@ def plot_orbits(ev, tr, starts, sgr_theta, fout, lnL=3.):
                 ax.set_aspect('equal')
                 ax.set_xlabel('%s [kpc]' % lab[p])
                 ax.set_ylabel('%s [kpc]' % lab[q])
+        # zoom on the Sgr starting points; arrows = starting velocity x 0.02 time units
+        cen = np.mean([th[6:9] for th in starts.values()], axis=0)
+        for ax, (p, q) in zip(axes[2], pairs):
+            ax.plot(sgr[:, p], sgr[:, q], '-', color='tab:red', lw=0.8)
+            for (name, th), mk in zip(starts.items(), marks):
+                ax.plot(th[6 + p], th[6 + q], mk, mfc='none', mec='tab:red', ms=8)
+                ax.annotate('', xy=(th[6 + p] + 0.02 * th[9 + p], th[6 + q] + 0.02 * th[9 + q]),
+                            xytext=(th[6 + p], th[6 + q]), arrowprops=dict(arrowstyle='->', color='0.4', lw=0.8))
+            ax.set_xlim(cen[p] - 4, cen[p] + 4)
+            ax.set_ylim(cen[q] - 4, cen[q] + 4)
+            ax.set_aspect('equal')
+            ax.set_xlabel('%s [kpc]' % lab[p])
+            ax.set_ylabel('%s [kpc]' % lab[q])
+            ax.set_title('Sgr starting points (t = %g); arrows: v x 0.02' % vt.T_START, fontsize='small')
         h, l = axes[0, 0].get_legend_handles_labels()
         fig.legend(h, l, loc='upper center', ncol=4, frameon=False, fontsize='small')
-        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
         fig.savefig(fout, dpi=150)
     print('saved', fout)
