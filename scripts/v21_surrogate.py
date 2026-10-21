@@ -411,28 +411,40 @@ def restricted_start(tr, lnL=3.):
 LMC_EXP = dict(type='Multipole', lmax=4, symmetry='n', gridSizeR=25, rmin=0.2, rmax=300.)
 
 
-def expansion_dir(k, i=0):
-    return os.path.join(vt.run_dir(k, i), 'expansions')
+def expansion_dir(k, i=0, name='expansions'):
+    return os.path.join(vt.run_dir(k, i), name)
 
 
-def build_expansions(k, i=0):
-    """On OBS: expansions of every snapshot of run i of round k -> runKK/expansions/{halo,disk,lmc}_JJ.coef."""
+# higher-order alternative: halo/LMC lmax 8, disk mmax 6 on a grid out to R = 80, |z| = 40 kpc (Sgr reaches 71 kpc)
+HALO_EXP_HI = dict(rn.HALO_EXP, lmax=8, gridSizeR=35)
+DISK_EXP_HI = dict(rn.DISK_EXP, mmax=6, gridSizeR=25, gridSizez=25, Rmax=80., zmax=40.)
+LMC_EXP_HI = dict(LMC_EXP, lmax=8, gridSizeR=35)
+
+
+def build_expansions(k, i=0, name='expansions', halo=None, disk=None, lmc=None):
+    """
+    On OBS: expansions of every snapshot of run i of round k -> runKK/<name>/{halo,disk,lmc}_JJ.coef.
+    halo/disk/lmc: agama settings (default rn.HALO_EXP, rn.DISK_EXP, LMC_EXP); e.g.
+    build_expansions(7, name='expansions_hi', halo=HALO_EXP_HI, disk=DISK_EXP_HI, lmc=LMC_EXP_HI).
+    """
+    halo, disk, lmc = halo or rn.HALO_EXP, disk or rn.DISK_EXP, lmc or LMC_EXP
     comps = json.load(open(vt.BASE_ICS + '.json'))['components']
     evol = os.path.join(vt.run_dir(k, i), 'evol.nemo')
     tr = np.load(os.path.join(vt.run_dir(k, i), 'centres.npz'))
-    d = expansion_dir(k, i)
+    d = expansion_dir(k, i, name)
     os.makedirs(d, exist_ok=True)
     nst = vi.MW_COUNTS['nbody_stars']
     (a, b), (la, lb) = comps['mw'], comps['lmc']
     for j, t in enumerate(tr['times']):
         xv, m = rn.read_snapshot(evol, t)
         x = xv[a:b, :3] - tr['mw'][j, :3]
-        agama.Potential(particles=(x[nst:], m[a + nst:b]), **rn.HALO_EXP).export(os.path.join(d, 'halo_%02d.coef' % j))
-        agama.Potential(particles=(x[:nst], m[a:a + nst]), **rn.DISK_EXP).export(os.path.join(d, 'disk_%02d.coef' % j))
-        agama.Potential(particles=(xv[la:lb, :3] - tr['lmc'][j, :3], m[la:lb]), **LMC_EXP).export(
+        agama.Potential(particles=(x[nst:], m[a + nst:b]), **halo).export(os.path.join(d, 'halo_%02d.coef' % j))
+        agama.Potential(particles=(x[:nst], m[a:a + nst]), **disk).export(os.path.join(d, 'disk_%02d.coef' % j))
+        agama.Potential(particles=(xv[la:lb, :3] - tr['lmc'][j, :3], m[la:lb]), **lmc).export(
             os.path.join(d, 'lmc_%02d.coef' % j))
         print('t = %6.3f expansions done' % t, flush=True)
     np.save(os.path.join(d, 'times.npy'), tr['times'])
+    json.dump(dict(halo=halo, disk=disk, lmc=lmc), open(os.path.join(d, 'settings.json'), 'w'), indent=1)
     return d
 
 
