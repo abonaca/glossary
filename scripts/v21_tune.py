@@ -7,7 +7,8 @@ relative to the Milky Way centre (V21 Section 2 / 3.2). Each round runs the base
 per unknown nudged by +DELTA (13 gyrfalcON runs), measures the endpoints from the snapshots and
 takes a Gauss-Newton step with the finite-difference Jacobian.
 
-Centres: Milky Way - shrinking sphere on its stars; LMC - shrinking sphere on its particles,
+Centres: Milky Way - shrinking sphere on its stars (mean velocity within R_VEL_MW); LMC - shrinking
+sphere on its particles (mean velocity within R_VEL_LMC),
 followed from snapshot to snapshot; Sgr - V21's definition, iterated median position/velocity of
 Sgr star particles within 5 kpc.
 
@@ -41,6 +42,10 @@ TARGET = np.array([-0.6, -41.3, -27.1, -63.9, -213.8, 206.6,
 TOL = np.array([0.2] * 3 + [1.] * 3 + [0.1] * 3 + [1.] * 3)
 DELTA = np.array([1.] * 3 + [1.] * 3 + [0.3] * 3 + [3.] * 3)
 NSGR_STARS = vi.SGR_COUNTS['nstar']          # Sgr star particles come first within the Sgr block
+# velocity apertures [kpc] of the MW and LMC shrinking-sphere centres. Until round 8 of the first pass
+# both were 1 kpc, which left ~0.4 (MW) and ~0.9 (LMC) km/s of sampling error per component
+# (v21_centre_check); the larger apertures cut that to ~0.2 and ~0.3 km/s.
+R_VEL_MW, R_VEL_LMC = 3., 5.
 
 
 def round_dir(k):
@@ -69,12 +74,63 @@ def new_round(k, theta=None, delta=DELTA, note=''):
 
 
 def run_theta(k, i):
-    """theta of run i in round k (0 = base, i>0 = base + delta along unknown i-1)."""
+    """
+    theta of run i in round k. Joint rounds: 0 = base, i>0 = base + delta along unknown i-1.
+    Sgr-only rounds (new_sgr_round) list the theta of every run explicitly.
+    """
     info = json.load(open(os.path.join(round_dir(k), 'round.json')))
+    if 'runs' in info:
+        return np.array(info['runs'][i])
     theta = np.array(info['theta'])
     if i > 0:
         theta[i - 1] += info['delta'][i - 1]
     return theta
+
+
+def sgr_orbit_shift(theta, dt, expansions=None):
+    """
+    Sgr's t=-3 state moved by dt [Myr] along its own orbit (dt>0: further along, so Sgr arrives
+    earlier), in the t=-3 MW+LMC field of a live run's expansions (default: round 3's), with the LMC
+    held at theta's start and the LMC's pull on the MW centre subtracted. Returns the 6-vector.
+    """
+    from scipy.integrate import solve_ivp
+    e = expansions or os.path.join(round_dir(3), 'expansions')
+    mw = agama.Potential(agama.Potential(os.path.join(e, 'halo_00.coef')),
+                         agama.Potential(os.path.join(e, 'disk_00.coef')))
+    lmc = agama.Potential(os.path.join(e, 'lmc_00.coef'))
+    xl = np.asarray(theta[:3], float)
+    rhs = lambda t, w: np.hstack((w[3:], mw.force(w[:3]) + lmc.force(w[:3] - xl) - lmc.force(-xl)))
+    return solve_ivp(rhs, (0, dt / 977.8), np.asarray(theta[6:], float), rtol=1e-11, atol=1e-11,
+                     method='DOP853').y[:, -1]
+
+
+def new_sgr_round(k, theta, sgr_delta, scan_dt, note=''):
+    """
+    Sgr-only round (LMC fixed at theta[:6]): run 0 = base theta, runs 1-6 = Sgr's x0..vz0 nudged by
+    sgr_delta, runs 7.. = Sgr moved by scan_dt [Myr] along its orbit (sgr_orbit_shift). 13 runs total.
+    """
+    theta = np.asarray(theta, float)
+    if 7 + len(scan_dt) != 13:
+        raise ValueError('need 6 timing-scan offsets for 13 runs')
+    runs = [theta.copy()]
+    for j in range(6):
+        th = theta.copy()
+        th[6 + j] += sgr_delta[j]
+        runs.append(th)
+    for dt in scan_dt:
+        th = theta.copy()
+        th[6:] = sgr_orbit_shift(theta, dt)
+        runs.append(th)
+    d = round_dir(k)
+    os.makedirs(d, exist_ok=True)
+    info = dict(round=k, kind='sgr', names=NAMES, theta=theta.tolist(),
+                sgr_delta=np.asarray(sgr_delta, float).tolist(), scan_dt=list(map(float, scan_dt)),
+                runs=[r.tolist() for r in runs], target=TARGET.tolist(), tol=TOL.tolist(), note=note)
+    json.dump(info, open(os.path.join(d, 'round.json'), 'w'), indent=1)
+    print('round %d (Sgr only): theta = %s' % (k, np.array2string(theta, precision=3)))
+    for i, r in enumerate(runs[1:], 1):
+        print('  run %2d: Sgr start change %s' % (i, np.array2string(r[6:] - theta[6:], precision=4)))
+    return info
 
 
 def build_ics(k, i):
@@ -143,13 +199,13 @@ def track_centres(evol, comps, theta, r_member_lmc=10., r_member_sgr=5.):
     for t in times:
         xv, m = rn.read_snapshot(evol, t)
         a = comps['mw'][0]
-        c, v = shrinking_centre(xv[a:a + nst], m[a:a + nst], mw_g)
+        c, v = shrinking_centre(xv[a:a + nst], m[a:a + nst], mw_g, r_vel=R_VEL_MW)
         mw_g = c
         out['mw'].append(np.hstack((c, v)))
         a, b = comps['lmc']
         x = xv[a:b]
         g = theta[:3] if lmc_mem is None else np.median(x[lmc_mem, :3], axis=0)
-        c, v = shrinking_centre(x, m[a:b], g, r_start=20.)
+        c, v = shrinking_centre(x, m[a:b], g, r_start=20., r_vel=R_VEL_LMC)
         lmc_mem = np.sum((x[:, :3] - c)**2, axis=1) < r_member_lmc**2
         out['lmc'].append(np.hstack((c, v)))
         a = comps['sgr'][0]
@@ -205,6 +261,8 @@ def finish_round(k, block=False, move_perturbed=True):
     F = np.array(F)
     resid = F[0] - TARGET
     ok = bool(np.all(np.abs(resid) < TOL))
+    if info.get('kind') == 'sgr':
+        return _finish_sgr_round(k, info, F, resid, ok, move_perturbed)
     dtheta, J = gauss_newton(F[0], F[1:], info['delta'], block=block)
     info.update(endpoints=F.tolist(), residual=resid.tolist(), converged=ok, jacobian=J.tolist(),
                 dtheta=dtheta.tolist(), theta_next=(np.array(info['theta']) + dtheta).tolist(), block=block)
@@ -220,4 +278,31 @@ def finish_round(k, block=False, move_perturbed=True):
             shutil.move(src, dst)
     if not ok:
         new_round(k + 1, info['theta_next'], info['delta'], note='Gauss-Newton step from round %d' % k)
+    return info
+
+
+def _move_perturbed(k):
+    for i in range(1, 13):
+        src = os.path.join(run_dir(k, i), 'evol.nemo')
+        dst = os.path.join(SCRAP, 'round%02d' % k, 'run%02d_evol.nemo' % i)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(src, dst)
+
+
+def _finish_sgr_round(k, info, F, resid, ok, move_perturbed):
+    """finish_round for a Sgr-only round: Sgr-block Jacobian from runs 1-6, all misses; no next round."""
+    S = slice(6, 12)
+    J = (F[1:7, S] - F[0, S]).T / np.asarray(info['sgr_delta'])[None, :]
+    miss = F - TARGET
+    info.update(endpoints=F.tolist(), residual=resid.tolist(), misses=miss.tolist(), converged=ok,
+                jacobian_sgr=J.tolist())
+    json.dump(info, open(os.path.join(round_dir(k), 'round.json'), 'w'), indent=1)
+    labels = ['base'] + ['+d ' + n for n in NAMES[6:]] + ['%+.2f Myr' % t for t in info['scan_dt']]
+    print('misses (run - target), LMC kpc km/s | Sgr kpc km/s:')
+    for i, lab in enumerate(labels):
+        print('  run %2d %-12s LMC %s | Sgr %s' % (i, lab, np.array2string(miss[i, :6], precision=2),
+                                                  np.array2string(miss[i, 6:], precision=2)))
+    print('base converged' if ok else 'base not converged')
+    if move_perturbed:
+        _move_perturbed(k)
     return info

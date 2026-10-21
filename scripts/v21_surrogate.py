@@ -156,6 +156,8 @@ def jacobian(theta, p, sgr_t, sgr_m, delta=vt.DELTA):
 # ------------------------------------------------------------------------------------ calibration
 def run_theta(info, i):
     """theta of run i of a round (as v21_tune.run_theta, from the round.json contents)."""
+    if 'runs' in info:
+        return np.array(info['runs'][i], float)
     theta = np.array(info['theta'], float)
     if i > 0:
         theta[i - 1] += info['delta'][i - 1]
