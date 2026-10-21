@@ -65,11 +65,13 @@ def sgr_mass_series(k, radius=5.):
     return out
 
 
-def sgr_bound_mass(k, i=0, radii=(5., 10., 20.), niter=30):
+def sgr_bound_mass(k, i=0, radii=(5., 10., 20.), niter=30, r_start=10.):
     """
     On OBS: Sgr's self-bound mass in every snapshot of run i of round k, by iterative unbinding (E < 0
     in the Multipole potential of the bound set about the run's Sgr centre, velocities relative to the
-    bound set's mean), plus the mass of all Sgr particles within `radii` of the centre.
+    run's Sgr centre velocity; the first set is all particles within r_start), plus the mass of all
+    Sgr particles within `radii` of the centre. Starting from all particles fails once most of the
+    mass is in the stream (the core then looks unbound).
     -> runKK/sgr_bound_mass.npz
     """
     comps = json.load(open(vt.BASE_ICS + '.json'))['components']
@@ -82,12 +84,11 @@ def sgr_bound_mass(k, i=0, radii=(5., 10., 20.), niter=30):
         x, v, ms = xv[a:b, :3] - c[:3], xv[a:b, 3:6], m[a:b]
         r = np.linalg.norm(x, axis=1)
         out['within'].append([ms[r < R].sum() for R in radii])
-        bound = np.ones(len(ms), bool)
+        bound = r < r_start
         for _ in range(niter):
             pot = agama.Potential(type='Multipole', particles=(x[bound], ms[bound]), lmax=2, symmetry='t',
                                   gridSizeR=30, rmin=0.05, rmax=300.)
-            vc = np.average(v[bound], axis=0, weights=ms[bound])
-            new = 0.5 * np.sum((v - vc)**2, axis=1) + pot.potential(x) < 0
+            new = 0.5 * np.sum((v - c[3:6])**2, axis=1) + pot.potential(x) < 0
             done = np.array_equal(new, bound)
             bound = new
             if done or bound.sum() < 100:
