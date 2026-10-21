@@ -65,6 +65,43 @@ def sgr_mass_series(k, radius=5.):
     return out
 
 
+def sgr_bound_mass(k, i=0, radii=(5., 10., 20.), niter=30):
+    """
+    On OBS: Sgr's self-bound mass in every snapshot of run i of round k, by iterative unbinding (E < 0
+    in the Multipole potential of the bound set about the run's Sgr centre, velocities relative to the
+    bound set's mean), plus the mass of all Sgr particles within `radii` of the centre.
+    -> runKK/sgr_bound_mass.npz
+    """
+    comps = json.load(open(vt.BASE_ICS + '.json'))['components']
+    evol = os.path.join(vt.run_dir(k, i), 'evol.nemo')
+    tr = np.load(os.path.join(vt.run_dir(k, i), 'centres.npz'))
+    a, b = comps['sgr']
+    out = dict(times=tr['times'], bound=[], n_bound=[], radii=np.array(radii), within=[])
+    for t, c in zip(tr['times'], tr['sgr']):
+        xv, m = rn.read_snapshot(evol, t)
+        x, v, ms = xv[a:b, :3] - c[:3], xv[a:b, 3:6], m[a:b]
+        r = np.linalg.norm(x, axis=1)
+        out['within'].append([ms[r < R].sum() for R in radii])
+        bound = np.ones(len(ms), bool)
+        for _ in range(niter):
+            pot = agama.Potential(type='Multipole', particles=(x[bound], ms[bound]), lmax=2, symmetry='t',
+                                  gridSizeR=30, rmin=0.05, rmax=300.)
+            vc = np.average(v[bound], axis=0, weights=ms[bound])
+            new = 0.5 * np.sum((v - vc)**2, axis=1) + pot.potential(x) < 0
+            done = np.array_equal(new, bound)
+            bound = new
+            if done or bound.sum() < 100:
+                break
+        out['bound'].append(ms[bound].sum())
+        out['n_bound'].append(int(bound.sum()))
+        print('t = %6.3f  M_bound %.3g, M(<%s kpc) %s Msun' % (t, out['bound'][-1] * 232500, radii,
+              np.array2string(np.array(out['within'][-1]) * 232500, precision=3)), flush=True)
+    out = {key: np.array(val) for key, val in out.items()}
+    f = os.path.join(vt.run_dir(k, i), 'sgr_bound_mass.npz')
+    np.savez(f, **out)
+    return f
+
+
 def load_tracks(k, d=None):
     """Centre tracks of round k (runs 0-12), the round's theta/deltas and the base run's Sgr mass."""
     d = os.path.join(LOCAL_TRACKS, 'round%02d' % k) if d is None else d
