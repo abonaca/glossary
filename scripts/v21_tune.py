@@ -94,7 +94,7 @@ def sgr_orbit_shift(theta, dt, expansions=None):
     held at theta's start and the LMC's pull on the MW centre subtracted. Returns the 6-vector.
     """
     from scipy.integrate import solve_ivp
-    e = expansions or os.path.join(round_dir(3), 'expansions')
+    e = expansions or os.path.join(run_dir(3, 0), 'expansions')
     mw = agama.Potential(agama.Potential(os.path.join(e, 'halo_00.coef')),
                          agama.Potential(os.path.join(e, 'disk_00.coef')))
     lmc = agama.Potential(os.path.join(e, 'lmc_00.coef'))
