@@ -133,6 +133,30 @@ def new_sgr_round(k, theta, sgr_delta, scan_dt, note=''):
     return info
 
 
+def new_offset_round(k, theta, offsets, labels, note=''):
+    """
+    Sgr-only round from an explicit list of Sgr start offsets (LMC fixed at theta[:6]): run i starts
+    Sgr at theta[6:] + offsets[i]. No base run; every run is scored on its own (finish_round).
+    """
+    theta = np.asarray(theta, float)
+    offsets = np.asarray(offsets, float)
+    runs = []
+    for o in offsets:
+        th = theta.copy()
+        th[6:] += o
+        runs.append(th)
+    d = round_dir(k)
+    os.makedirs(d, exist_ok=True)
+    info = dict(round=k, kind='sgr_offsets', names=NAMES, theta=theta.tolist(), offsets=offsets.tolist(),
+                labels=list(labels), runs=[r.tolist() for r in runs], target=TARGET.tolist(), tol=TOL.tolist(),
+                note=note)
+    json.dump(info, open(os.path.join(d, 'round.json'), 'w'), indent=1)
+    print('round %d (Sgr offsets, %d runs): reference theta = %s' % (k, len(runs), np.array2string(theta, precision=3)))
+    for i, (lab, o) in enumerate(zip(labels, offsets)):
+        print('  run %2d %-24s Sgr start change %s' % (i, lab, np.array2string(o, precision=4)))
+    return info
+
+
 def build_ics(k, i):
     """
     Initial snapshot of run i of round k: R2's particles with the LMC and Sgr moved from V21's t=-3
@@ -252,7 +276,7 @@ def finish_round(k, block=False, move_perturbed=True):
     info = json.load(open(os.path.join(d, 'round.json')))
     comps = json.load(open(BASE_ICS + '.json'))['components']
     F = []
-    for i in range(13):
+    for i in range(len(info['runs']) if 'runs' in info else 13):
         evol = os.path.join(run_dir(k, i), 'evol.nemo')
         tr = track_centres(evol, comps, run_theta(k, i))
         np.savez(os.path.join(run_dir(k, i), 'centres.npz'), **tr)
@@ -263,6 +287,8 @@ def finish_round(k, block=False, move_perturbed=True):
     ok = bool(np.all(np.abs(resid) < TOL))
     if info.get('kind') == 'sgr':
         return _finish_sgr_round(k, info, F, resid, ok, move_perturbed)
+    if info.get('kind') == 'sgr_offsets':
+        return _finish_offset_round(k, info, F)
     dtheta, J = gauss_newton(F[0], F[1:], info['delta'], block=block)
     info.update(endpoints=F.tolist(), residual=resid.tolist(), converged=ok, jacobian=J.tolist(),
                 dtheta=dtheta.tolist(), theta_next=(np.array(info['theta']) + dtheta).tolist(), block=block)
@@ -287,6 +313,60 @@ def _move_perturbed(k):
         dst = os.path.join(SCRAP, 'round%02d' % k, 'run%02d_evol.nemo' % i)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.move(src, dst)
+
+
+CLOSEST_FIELDS = os.path.join(TUNE, 'round07', 'run00', 'expansions_hi')    # t=0 MW/LMC fields (snapshot 24)
+
+
+def sgr_closest(sgr, lmc, window=30., step=0.005, fields=CLOSEST_FIELDS, j=24):
+    """
+    Sgr's present-day state (relative to the MW) integrated +-window Myr in the t=0 MW and LMC fields
+    of `fields`, the LMC moving at its present velocity (its pull on the MW centre included, no
+    friction). Returns dict: closest approach to the target position (time [Myr], 6-vector miss) and
+    the moment with the smallest |dv| among those with every |dx_i| <= TOL (or None).
+    """
+    from scipy.integrate import solve_ivp
+    mw = agama.Potential(agama.Potential(os.path.join(fields, 'halo_%02d.coef' % j)),
+                         agama.Potential(os.path.join(fields, 'disk_%02d.coef' % j)))
+    lp = agama.Potential(os.path.join(fields, 'lmc_%02d.coef' % j))
+    n = int(round(window / step))
+    ts = np.linspace(-window, window, 2 * n + 1) / 977.8
+    ts[n] = 0.
+    xl = lambda t: lmc[:3] + lmc[3:6] * t
+    f = lambda t, w: np.hstack((w[3:], mw.force(w[:3]) + lp.force(w[:3] - xl(t)) - lp.force(-xl(t))))
+    up = solve_ivp(f, (0, ts[-1]), sgr, t_eval=ts[n:], rtol=1e-11, atol=1e-11, method='DOP853').y.T
+    dn = solve_ivp(f, (0, ts[0]), sgr, t_eval=ts[n::-1], rtol=1e-11, atol=1e-11, method='DOP853').y.T[::-1]
+    o = np.vstack((dn[:-1], up)) - TARGET[6:]
+    kc = np.argmin(np.linalg.norm(o[:, :3], axis=1))
+    out = dict(t_closest=ts[kc] * 977.8, miss_closest=o[kc].tolist(), t_best=None, miss_best=None)
+    ok = np.all(np.abs(o[:, :3]) <= TOL[6:9], axis=1)
+    if ok.any():
+        idx = np.flatnonzero(ok)
+        kb = idx[np.argmin(np.linalg.norm(o[idx, 3:], axis=1))]
+        out.update(t_best=ts[kb] * 977.8, miss_best=o[kb].tolist())
+    return out
+
+
+def _finish_offset_round(k, info, F):
+    """finish_round for new_offset_round: every run's misses at t=0 and Sgr at closest approach; no next round."""
+    miss = F - TARGET
+    ok = np.all(np.abs(miss) < TOL, axis=1)
+    lmc_ok = np.all(np.abs(miss[:, :6]) < TOL[:6], axis=1)
+    close = [sgr_closest(F[i, 6:], F[i, :6]) for i in range(len(F))]
+    info.update(endpoints=F.tolist(), misses=miss.tolist(), converged=ok.tolist(), lmc_ok=lmc_ok.tolist(),
+                closest=close)
+    json.dump(info, open(os.path.join(round_dir(k), 'round.json'), 'w'), indent=1)
+    print('misses (run - target), LMC kpc km/s | Sgr kpc km/s at t=0; Sgr velocity miss at the best moment '
+          'within the position tolerance (km/s)')
+    for i, lab in enumerate(info['labels']):
+        c = close[i]
+        best = ('t %+5.2f Myr dv %s' % (c['t_best'], np.array2string(np.array(c['miss_best'][3:]), precision=2))
+                if c['t_best'] is not None else 'never within position tolerance')
+        print('  run %2d %-24s LMC %s | Sgr %s | %s%s%s' % (i, lab, np.array2string(miss[i, :6], precision=2),
+              np.array2string(miss[i, 6:], precision=2), best, '  LMC out' if not lmc_ok[i] else '',
+              '  ALL WITHIN TOLERANCE' if ok[i] else ''))
+    print('%d of %d runs within all tolerances at t=0' % (ok.sum(), len(ok)))
+    return info
 
 
 def _finish_sgr_round(k, info, F, resid, ok, move_perturbed):

@@ -1,5 +1,5 @@
 #!/bin/bash
-# After a tuning round: centres and endpoints of its 13 runs, the Gauss-Newton step, and round.json
+# After a tuning round: centres and endpoints of its runs, the Gauss-Newton step (or per-run scores), and round.json
 # for the next round (scripts/v21_tune.py finish_round). Perturbed runs' snapshots go to scrap/tune.
 # Submit:  sbatch --dependency=afterok:<array job> ~/projects/glossary/scripts/obs/tune_endpoints.sbatch ROUND [block]
 #

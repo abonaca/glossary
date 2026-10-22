@@ -1,8 +1,8 @@
 #!/bin/bash
-# One round of the joint LMC+Sgr tuning (scripts/v21_tune.py): task k builds the initial snapshot of
-# run k (0 = base, 1-12 = one unknown nudged) and evolves it with gyrfalcON from t=-3 to 0, writing
+# One round of the LMC+Sgr tuning (scripts/v21_tune.py): task k builds the initial snapshot of
+# run k (theta from round.json: base + nudges, or an explicit list of runs) and evolves it with gyrfalcON from t=-3 to 0, writing
 # snapshots every 1/8 time unit. Needs TUNE/roundNN/round.json (v21_tune.new_round / finish_round).
-# Submit:  sbatch --array=0-12 ~/projects/glossary/scripts/obs/tune_round.sbatch ROUND
+# Submit:  sbatch --array=0-12 ~/projects/glossary/scripts/obs/tune_round.sbatch ROUND   (0-23 for a 24-run round)
 #
 #SBATCH --job-name=tune-round
 #SBATCH --partition=obs
