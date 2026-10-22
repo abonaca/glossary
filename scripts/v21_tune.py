@@ -157,6 +157,40 @@ def new_offset_round(k, theta, offsets, labels, note=''):
     return info
 
 
+def extend_offset_round(k, offsets, labels, note=''):
+    """
+    Append runs to an existing new_offset_round round k: each new run starts Sgr at theta[6:] + offsets[i]
+    (offsets relative to the round's reference theta, as in new_offset_round). Earlier runs are untouched.
+    """
+    f = os.path.join(round_dir(k), 'round.json')
+    info = json.load(open(f))
+    if info.get('kind') != 'sgr_offsets':
+        raise ValueError('round %d is not an offset round' % k)
+    theta = np.array(info['theta'])
+    n0 = len(info['runs'])
+    for o, lab in zip(np.asarray(offsets, float), labels):
+        th = theta.copy()
+        th[6:] += o
+        info['runs'].append(th.tolist())
+        info['offsets'].append(o.tolist())
+        info['labels'].append(lab)
+    if note:
+        info['note'] = info.get('note', '') + ' | runs %d-%d: %s' % (n0, len(info['runs']) - 1, note)
+    json.dump(info, open(f, 'w'), indent=1)
+    for i in range(n0, len(info['runs'])):
+        print('  run %2d %-24s Sgr start change %s' % (i, info['labels'][i], np.array2string(
+            np.array(info['offsets'][i]), precision=4)))
+    return info
+
+
+def offset_jacobian(k, base, nudged, delta):
+    """Sgr-block finite-difference Jacobian (rows: endpoint x..vz, columns: start x0..vz0) of offset round k
+    from base run `base` and runs `nudged` (one per start component, nudged by delta)."""
+    info = json.load(open(os.path.join(round_dir(k), 'round.json')))
+    F = np.array(info['endpoints'])[:, 6:]
+    return (F[list(nudged)] - F[base]).T / np.asarray(delta, float)[None, :]
+
+
 def build_ics(k, i):
     """
     Initial snapshot of run i of round k: R2's particles with the LMC and Sgr moved from V21's t=-3
