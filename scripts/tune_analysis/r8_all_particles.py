@@ -68,8 +68,41 @@ def frames(k=8, i=3, outdir=None):
                os.path.join(outdir, 'tune_r%d_run%02d_all_particles_xyz_%02d.png' % (k, i, n)))
 
 
+ADOPTED = '/carnegie/nobackup/users/abonaca/v21_sim/adopted/r09run02'
+GYR = 0.9778                    # Gyr per model time unit
+
+
+def adopted_frames(task, ntask, d=ADOPTED, step=1 / 256., k=9, i=2):
+    """Frames of the dense-output adopted run (on OBS), split over ntask array tasks: task handles a contiguous
+    block of snapshot times, cut out of evol.nemo with snapsplit (one pass) into a task-local temporary directory,
+    each split file deleted once drawn. Frame n is snapshot t = -3 + n * step, relative to the t=0 MW centre of
+    round k run i (the same initial conditions)."""
+    import subprocess, glob, agama, v21_tune as vt, r0_noise as rn
+    times = -3 + np.arange(int(round(3 / step)) + 1) * step
+    blocks = np.array_split(np.arange(len(times)), ntask)[task]
+    lo, hi = times[blocks[0]], times[blocks[-1]]
+    c0 = np.load(os.path.join(vt.run_dir(k, i), 'centres.npz'))['mw'][-1, :3]
+    outdir = os.path.join(d, 'frames')
+    tmp = os.path.join(d, 'split_%03d' % task)
+    os.makedirs(outdir, exist_ok=True); os.makedirs(tmp, exist_ok=True)
+    subprocess.run(['bash', '-c', 'set +u; source %s >/dev/null 2>&1; snapsplit %s %s/s_%%04d.nemo nbody=%d '
+                    'times=%.8f:%.8f' % (rn.NEMO_START, os.path.join(d, 'evol.nemo'), tmp, COMPS['sgr'][1],
+                                         lo - step / 4, hi + step / 4)], check=True, capture_output=True)
+    files = sorted(glob.glob(os.path.join(tmp, 's_*.nemo')))
+    if len(files) != len(blocks):
+        raise RuntimeError('task %d: %d split files for %d times' % (task, len(files), len(blocks)))
+    for n, f in zip(blocks, files):
+        xv, _ = agama.readSnapshot(f)
+        figure(xv[:, :3] - c0, 'adopted model (r%d run %d), t = %+.3f Gyr, relative to the t = 0 MW centre'
+               % (k, i, times[n] * GYR), os.path.join(outdir, 'adopted_all_particles_xyz_%03d.png' % n))
+        os.remove(f)
+    os.rmdir(tmp)
+
+
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == 'frames':
         frames(*map(int, sys.argv[2:4]))
+    elif len(sys.argv) > 1 and sys.argv[1] == 'adopted':
+        adopted_frames(*map(int, sys.argv[2:4]))
     else:
         plot()
