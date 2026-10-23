@@ -1,3 +1,7 @@
+"""Round-3 start (theta3_submitted = theta2 + theta3 step rounded to 3 decimals, passed to v21_tune.new_round(3, ...)): lnL
+recalibration on the round-2 base, offset-corrected evolving-field Sgr solve, damped (lambda=0.3) LMC-block step, iterated
+with the live Jacobian cross-terms for NPASS passes. Overwrites round3_candidates.pkl (later keys theta3_pass2, sgr_far are
+added by other scripts)."""
 import sys, json, pickle, numpy as np
 sys.path.insert(0, '/home/ana/projects/glossary/scripts')
 import v21_surrogate as vs, v21_tune as vt
@@ -43,7 +47,8 @@ print('round-3 candidate (Sgr->LMC cross-terms only)', th3a, flush=True)
 # 5. both directions: the model keeps the LMC on its round-2 live track, so shift the Sgr target by the
 #    live Jacobian's estimate of the LMC step's effect on Sgr, re-solve, recompute the LMC step; repeat
 sb, db = s, dl
-for it in range(3):
+NPASS = 2       # round 3 started from pass 1 (2 passes); 3 passes give theta3_pass2 in the saved pickle
+for it in range(NPASS):
     eff = J[6:, :6] @ db
     gb = lambda q: (f(q, L, [vt.T_END])[-1] - off + eff - vt.TARGET[6:]) * W
     rb = least_squares(gb, sb, x_scale=np.array([0.1, 0.1, 0.1, 1, 1, 1.]), diff_step=1e-5)
@@ -54,7 +59,8 @@ for it in range(3):
           % (it, eff / vt.TOL[6:], rb.fun, sb - th2[6:], db, rw + Jw @ db), flush=True)
 th3 = np.concatenate((th2[:6] + db, sb))
 print('round-3 candidate (both directions)', th3, '\n  minus one-way candidate', th3 - th3a)
-c = dict(theta2=th2, theta3=th3, theta3_oneway=th3a, lnL=L, offset=off, sgr_fun=rb.fun, lmc_step=db,
+theta3_submitted = th2 + np.round(th3 - th2, 3)   # the round-3 start: step rounded to 3 decimals
+c = dict(theta2=th2, theta3=th3, theta3_submitted=theta3_submitted, theta3_oneway=th3a, lnL=L, offset=off, sgr_fun=rb.fun, lmc_step=db,
          auto_gn=np.array(info['theta_next']))
 pickle.dump(c, open(O + 'round02/round3_candidates.pkl', 'wb'))
 th0 = np.array(json.load(open(O + 'round00/round.json'))['theta'])
