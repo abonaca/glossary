@@ -5,6 +5,7 @@ rerun in v21_sim/adopted/r09run02 is identical), in the MW's own potential at th
     plot()           # locally: E-Lz density -> plots/adopted_mw_stars_ELz.png
     plot_sky()       # locally: stars with |z| > 2 kpc and |b| > 30 deg seen from the Sun -> plots/adopted_mw_stars_ELz_zb_sun.png
     plot_sky(circle=True)   # ... seen from anywhere on the solar circle -> plots/adopted_mw_stars_ELz_zb_circle.png
+    plot_circle_density()   # same selection, density at t = -3 and 0 -> plots/adopted_mw_stars_ELz_zb_circle_density.png
 
 Frame: positions and velocities relative to the MW centre (shrinking sphere on the MW stars with a 3 kpc velocity
 aperture, v21_tune.track_centres -> centres.npz). Lz = x vy - y vx in V21's Galactocentric axes. The model disc
@@ -109,6 +110,29 @@ def plot_sky(f=LOCAL + 'mw_ELz_t+0.000.npz', circle=False, zmin=2., bmin=30., ou
     fig.savefig(out, dpi=200)
     plt.close(fig)
     print(out)
+
+def plot_circle_density(times=(-3., 0.), zmin=2., bmin=30.,
+                        out='/home/ana/projects/glossary/plots/adopted_mw_stars_ELz_zb_circle_density.png'):
+    """E-Lz density of the stars passing the solar-circle selection (as plot_sky(circle=True)), applied separately at
+    each time: the same criteria, not the same particles. Shared colour scale."""
+    from matplotlib.colors import LogNorm
+    fig, ax = plt.subplots(1, len(times), figsize=(5.5 * len(times) + 1.5, 6), sharex=True, sharey=True)
+    rng, bins = ((-1.5, 3.5), (-18, -6)), (100, 120)
+    for a, t in zip(ax, times):
+        d = np.load(LOCAL + 'mw_ELz_t%+.3f.npz' % t)
+        s = circle_fraction(d['x'], zmin, bmin) > 0
+        print('t = %g: %d of %d stars selected' % (t, s.sum(), len(s)))
+        h = a.hist2d(d['L'][s, 2] / 1e3, d['E'][s] / 1e4, bins=bins, range=rng, norm=LogNorm(vmin=1, vmax=60),
+                     cmap='Greys', rasterized=True)
+        a.set_xlabel('$L_z$ [$10^3$ kpc km/s]  (model disc: $L_z > 0$)')
+        a.text(0.02, 0.98, 't = %+.2f Gyr\n|z| > %g kpc, |b| > %g$^\\circ$ from the solar circle (%d stars)'
+               % (t * 0.9778, zmin, bmin, s.sum()), transform=a.transAxes, va='top', fontsize=9)
+    ax[0].set_ylabel('E (MW potential) [$10^4$ (km/s)$^2$]')
+    fig.colorbar(h[3], ax=ax, label='stars per bin', fraction=0.03)
+    fig.savefig(out, dpi=200, bbox_inches='tight')
+    plt.close(fig)
+    print(out)
+
 
 if __name__ == '__main__':
     compute(float(sys.argv[1]) if len(sys.argv) > 1 else 0.)
