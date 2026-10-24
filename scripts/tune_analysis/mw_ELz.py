@@ -3,7 +3,8 @@ rerun in v21_sim/adopted/r09run02 is identical), in the MW's own potential at th
 
     compute(t=0.)    # on OBS: snapshot -> MW-centred stars, E in the MW (halo + stars) expansions -> mw_ELz_t*.npz
     plot()           # locally: E-Lz density -> plots/adopted_mw_stars_ELz.png
-    plot_sky()       # locally: stars with |z| > 2 kpc and |b| > 30 deg seen from the Sun -> plots/adopted_mw_stars_ELz_zb.png
+    plot_sky()       # locally: stars with |z| > 2 kpc and |b| > 30 deg seen from the Sun -> plots/adopted_mw_stars_ELz_zb_sun.png
+    plot_sky(circle=True)   # ... seen from anywhere on the solar circle -> plots/adopted_mw_stars_ELz_zb_circle.png
 
 Frame: positions and velocities relative to the MW centre (shrinking sphere on the MW stars with a 3 kpc velocity
 aperture, v21_tune.track_centres -> centres.npz). Lz = x vy - y vx in V21's Galactocentric axes. The model disc
@@ -68,26 +69,46 @@ def sky_selection(x, zmin=2., bmin=30., sun=SUN):
     return (np.abs(x[:, 2]) > zmin) & (np.abs(b) > bmin)
 
 
-def plot_sky(f=LOCAL + 'mw_ELz_t+0.000.npz', out='/home/ana/projects/glossary/plots/adopted_mw_stars_ELz_zb.png',
-             zmin=2., bmin=30.):
-    from matplotlib.colors import LogNorm
+def circle_fraction(x, zmin=2., bmin=30., rsun=-SUN[0], nphi=360):
+    """Fraction of nphi observers spaced evenly around the solar circle (radius rsun, in the plane) for whom the
+    star is at |b| > bmin; zero for stars with |z| <= zmin."""
+    f = np.zeros(len(x))
+    s = np.abs(x[:, 2]) > zmin
+    for phi in 2 * np.pi * np.arange(nphi) / nphi:
+        f[s] += sky_selection(x[s], zmin, bmin, rsun * np.array([np.cos(phi), np.sin(phi), 0.]))
+    return f / nphi
+
+
+def plot_sky(f=LOCAL + 'mw_ELz_t+0.000.npz', circle=False, zmin=2., bmin=30., out=None):
+    """E-Lz points of the stars with |z| > zmin and |b| > bmin, seen from the Sun (circle=False) or from anywhere on
+    the solar circle (circle=True: stars visible to at least one observer, coloured by the fraction of observers)."""
     d = np.load(f)
-    s = sky_selection(d['x'], zmin, bmin)
+    out = out or '/home/ana/projects/glossary/plots/adopted_mw_stars_ELz_zb_%s.png' % ('circle' if circle else 'sun')
+    if circle:
+        frac = circle_fraction(d['x'], zmin, bmin)
+        s = frac > 0
+        where = 'from the solar circle'
+    else:
+        s = sky_selection(d['x'], zmin, bmin)
+        where = 'from the Sun'
     E, Lz = d['E'][s] / 1e4, d['L'][s, 2] / 1e3
     print('%d of %d stars selected' % (s.sum(), len(s)))
-    fig, ax = plt.subplots(figsize=(7.5, 6))
-    h = ax.hist2d(Lz, E, bins=(300, 250), range=((-4., 5.5), (-22, -3)), norm=LogNorm(), cmap='Greys',
-                  rasterized=True)
-    fig.colorbar(h[3], ax=ax, label='stars per bin')
+    fig, ax = plt.subplots(figsize=(7.5 if circle else 6.5, 6))
+    if circle:
+        o = np.argsort(frac[s])
+        p = ax.scatter(Lz[o], E[o], c=frac[s][o], s=1, lw=0, cmap='viridis', vmin=0, rasterized=True)
+        fig.colorbar(p, ax=ax, label='fraction of solar-circle observers with |b| > %g$^\\circ$' % bmin)
+    else:
+        ax.plot(Lz, E, 'k.', ms=2, mew=0, rasterized=True)
+    ax.set_xlim(-1.5, 3.5); ax.set_ylim(-18, -6)
     ax.set_xlabel('$L_z$ [$10^3$ kpc km/s]  (model disc: $L_z > 0$)')
     ax.set_ylabel('E (MW potential) [$10^4$ (km/s)$^2$]')
-    ax.text(0.02, 0.98, 'adopted model (r9 run 2), MW stars, t = 0\n|z| > %g kpc, |b| > %g$^\\circ$ from the Sun '
-            '(%d stars)' % (zmin, bmin, s.sum()), transform=ax.transAxes, va='top', fontsize=9)
+    ax.text(0.02, 0.98, 'adopted model (r9 run 2), MW stars, t = 0\n|z| > %g kpc, |b| > %g$^\\circ$ %s (%d stars)'
+            % (zmin, bmin, where, s.sum()), transform=ax.transAxes, va='top', fontsize=9)
     fig.tight_layout()
     fig.savefig(out, dpi=200)
     plt.close(fig)
     print(out)
-
 
 if __name__ == '__main__':
     compute(float(sys.argv[1]) if len(sys.argv) > 1 else 0.)
