@@ -6,7 +6,7 @@ rerun in v21_sim/adopted/r09run02 is identical), in the MW's own potential at th
     plot_sky()       # locally: stars with |z| > 2 kpc and |b| > 30 deg seen from the Sun -> plots/adopted_mw_stars_ELz_zb_sun.png
     plot_sky(circle=True)   # ... seen from anywhere on the solar circle -> plots/adopted_mw_stars_ELz_zb_circle.png
     plot_circle_density()   # same selection, density at t = -3 and 0 -> plots/adopted_mw_stars_ELz_zb_circle_density.png
-    plot_circle_Ehist()     # same selection, energy histogram at t = 0 -> plots/adopted_mw_stars_E_zb_circle.png
+    plot_circle_Ehist()     # same selection, energy histograms at t = -3 and 0 -> plots/adopted_mw_stars_E_zb_circle.png
 
 Frame: positions and velocities relative to the MW centre (shrinking sphere on the MW stars with a 3 kpc velocity
 aperture, v21_tune.track_centres -> centres.npz). Lz = x vy - y vx in V21's Galactocentric axes. The model disc
@@ -135,22 +135,24 @@ def plot_circle_density(times=(-3., 0.), zmin=2., bmin=30.,
     print(out)
 
 
-def plot_circle_Ehist(t=0., zmin=2., bmin=30., out='/home/ana/projects/glossary/plots/adopted_mw_stars_E_zb_circle.png'):
-    """Energy histogram of the stars passing the solar-circle selection (as plot_sky(circle=True)) at time t."""
-    d = np.load(LOCAL + 'mw_ELz_t%+.3f.npz' % t)
-    s = circle_fraction(d['x'], zmin, bmin) > 0
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
-    n = ax.hist(d['E'][s] / 1e4, bins=np.arange(-18, -6 + 1e-6, 0.1), histtype='step', color='k')[0]
-    ax.set_ylim(0, 1.2 * n.max())
-    ax.set_xlabel('E (MW potential) [$10^4$ (km/s)$^2$]')
-    ax.set_ylabel('stars per 0.1 $\\times 10^4$ (km/s)$^2$')
-    ax.text(0.02, 0.98, 't = %+.2f Gyr\n|z| > %g kpc, |b| > %g$^\\circ$ from the solar circle (%d stars)'
-            % (t * 0.9778, zmin, bmin, s.sum()), transform=ax.transAxes, va='top', fontsize=9)
+def plot_circle_Ehist(times=(-3., 0.), zmin=2., bmin=30., dE=0.05,
+                      out='/home/ana/projects/glossary/plots/adopted_mw_stars_E_zb_circle.png'):
+    """Energy histograms of the stars passing the solar-circle selection (as plot_sky(circle=True)), applied
+    separately at each time (top to bottom), bins of dE [10^4 (km/s)^2]."""
+    fig, ax = plt.subplots(len(times), 1, figsize=(6.5, 3.2 * len(times)), sharex=True)
+    for a, t in zip(ax, times):
+        d = np.load(LOCAL + 'mw_ELz_t%+.3f.npz' % t)
+        s = circle_fraction(d['x'], zmin, bmin) > 0
+        n = a.hist(d['E'][s] / 1e4, bins=np.arange(-18, -6 + 1e-6, dE), histtype='step', color='k')[0]
+        a.set_ylim(0, 1.25 * n.max())
+        a.set_ylabel('stars per %g $\\times 10^4$ (km/s)$^2$' % dE)
+        a.text(0.02, 0.96, 't = %+.2f Gyr\n|z| > %g kpc, |b| > %g$^\\circ$ from the solar circle (%d stars)'
+               % (t * 0.9778, zmin, bmin, s.sum()), transform=a.transAxes, va='top', fontsize=9)
+    ax[-1].set_xlabel('E (MW potential) [$10^4$ (km/s)$^2$]')
     fig.tight_layout()
     fig.savefig(out, dpi=200)
     plt.close(fig)
     print(out)
-
 
 if __name__ == '__main__':
     compute(float(sys.argv[1]) if len(sys.argv) > 1 else 0.)
