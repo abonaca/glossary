@@ -61,13 +61,17 @@ def theta_v21():
     return np.concatenate([np.concatenate(vi.initial_phase(c, T_START)) for c in ('lmc', 'sgr')])
 
 
-def new_round(k, theta=None, delta=DELTA, note=''):
-    """Write roundNN/round.json for the base theta (default: V21's) and the perturbation sizes."""
+def new_round(k, theta=None, delta=DELTA, note='', base_ics=None, base_theta=None):
+    """Write roundNN/round.json for the base theta (default: V21's) and the perturbation sizes. base_ics (a .nemo
+    file with the R2 particle layout) and base_theta (the LMC and Sgr starts in it) replace R2 and V21's starts as
+    the snapshot the runs are built from (build_ics)."""
     theta = theta_v21() if theta is None else np.asarray(theta, float)
     d = round_dir(k)
     os.makedirs(d, exist_ok=True)
     info = dict(round=k, names=NAMES, theta=theta.tolist(), delta=np.asarray(delta, float).tolist(),
                 target=TARGET.tolist(), tol=TOL.tolist(), note=note)
+    if base_ics is not None:
+        info.update(base_ics=base_ics, base_theta=np.asarray(base_theta, float).tolist())
     json.dump(info, open(os.path.join(d, 'round.json'), 'w'), indent=1)
     print('round %d: theta = %s' % (k, np.array2string(theta, precision=3)))
     return info
@@ -194,11 +198,17 @@ def offset_jacobian(k, base, nudged, delta):
 def build_ics(k, i):
     """
     Initial snapshot of run i of round k: R2's particles with the LMC and Sgr moved from V21's t=-3
-    centres (where R2 placed them) to the run's theta.
+    centres (where R2 placed them) to the run's theta. A round with base_ics in round.json starts instead from
+    that snapshot, moving the LMC and Sgr from its base_theta.
     """
     comps = json.load(open(BASE_ICS + '.json'))['components']
-    xv, m = agama.readSnapshot(BASE_ICS + '.nemo')
-    shift = run_theta(k, i) - theta_v21()
+    info = json.load(open(os.path.join(round_dir(k), 'round.json')))
+    if 'base_ics' in info:
+        xv, m = agama.readSnapshot(info['base_ics'])
+        shift = run_theta(k, i) - np.array(info['base_theta'])
+    else:
+        xv, m = agama.readSnapshot(BASE_ICS + '.nemo')
+        shift = run_theta(k, i) - theta_v21()
     for j, c in enumerate(('lmc', 'sgr')):
         a, b = comps[c]
         xv[a:b] += shift[6 * j:6 * j + 6]
