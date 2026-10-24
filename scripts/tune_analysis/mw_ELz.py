@@ -29,11 +29,12 @@ GYR = 0.9778                            # Gyr per model time unit
 LOCAL = '/home/ana/projects/glossary/output/v21_sim/adopted/'
 
 
-def _snapshot_potential(t, k=9, i=2):
-    """MW-centred MW particles at time t and the MW (halo + stars) expansions; also the centres file and index."""
+def _snapshot_potential(t, k=9, i=2, d=None):
+    """MW-centred MW particles at time t and the MW (halo + stars) expansions; also the centres file and index.
+    d: run directory with evol.nemo and centres.npz (default round k run i)."""
     import agama, v21_tune as vt, r0_noise as rn
     agama.setUnits(length=1, velocity=1, mass=vt.vi.MASS_UNIT)
-    d = vt.run_dir(k, i)
+    d = d or vt.run_dir(k, i)
     c = np.load(os.path.join(d, 'centres.npz'))
     j = int(np.argmin(np.abs(c['times'] - t)))
     xv, m = rn.read_snapshot(os.path.join(d, 'evol.nemo'), t)
@@ -43,8 +44,8 @@ def _snapshot_potential(t, k=9, i=2):
     return xv, pot, c, j, d
 
 
-def compute(t=0., k=9, i=2, outdir=None):
-    xv, pot, c, j, d = _snapshot_potential(t, k, i)
+def compute(t=0., k=9, i=2, outdir=None, d=None):
+    xv, pot, c, j, d = _snapshot_potential(t, k, i, d)
     s = xv[:NSTARS]
     E = 0.5 * np.sum(s[:, 3:]**2, 1) + pot.potential(s[:, :3])
     L = np.cross(s[:, :3], s[:, 3:])
@@ -121,22 +122,23 @@ def plot_sky(f=LOCAL + 'mw_ELz_t+0.000.npz', circle=False, zmin=2., bmin=30., ou
     plt.close(fig)
     print(out)
 
-def plot_circle_density(times=(-3., 0.), zmin=2., bmin=30.,
+def plot_circle_density(times=(-3., 0.), zmin=2., bmin=30., src=LOCAL, lz=(-1.5, 3.5), disc='$L_z > 0$',
+                        label='',
                         out='/home/ana/projects/glossary/plots/adopted_mw_stars_ELz_zb_circle_density.png'):
     """E-Lz density of the stars passing the solar-circle selection (as plot_sky(circle=True)), applied separately at
     each time: the same criteria, not the same particles. Shared colour scale."""
     from matplotlib.colors import LogNorm
     fig, ax = plt.subplots(1, len(times), figsize=(5.5 * len(times) + 1.5, 6), sharex=True, sharey=True)
-    rng, bins = ((-1.5, 3.5), (-18, -6)), (100, 120)
+    rng, bins = (lz, (-18, -6)), (100, 120)
     for a, t in zip(ax, times):
-        d = np.load(LOCAL + 'mw_ELz_t%+.3f.npz' % t)
+        d = np.load(src + 'mw_ELz_t%+.3f.npz' % t)
         s = circle_fraction(d['x'], zmin, bmin) > 0
         print('t = %g: %d of %d stars selected' % (t, s.sum(), len(s)))
         h = a.hist2d(d['L'][s, 2] / 1e3, d['E'][s] / 1e4, bins=bins, range=rng, norm=LogNorm(vmin=1, vmax=60),
                      cmap='Greys', rasterized=True)
-        a.set_xlabel('$L_z$ [$10^3$ kpc km/s]  (model disc: $L_z > 0$)')
-        a.text(0.02, 0.98, 't = %+.2f Gyr\n|z| > %g kpc, |b| > %g$^\\circ$ from the solar circle (%d stars)'
-               % (t * 0.9778, zmin, bmin, s.sum()), transform=a.transAxes, va='top', fontsize=9)
+        a.set_xlabel('$L_z$ [$10^3$ kpc km/s]  (model disc: %s)' % disc)
+        a.text(0.02, 0.98, '%st = %+.2f Gyr\n|z| > %g kpc, |b| > %g$^\\circ$ from the solar circle (%d stars)'
+               % (label, t * 0.9778, zmin, bmin, s.sum()), transform=a.transAxes, va='top', fontsize=9)
     ax[0].set_ylabel('E (MW potential) [$10^4$ (km/s)$^2$]')
     fig.colorbar(h[3], ax=ax, label='stars per bin', fraction=0.03)
     fig.savefig(out, dpi=200, bbox_inches='tight')
@@ -227,8 +229,20 @@ def plot_periods(times=(-3., 0.), bins=np.linspace(0.05, 0.25, 70),
     plt.close(fig)
     print(out)
 
+PROGRADE = '/carnegie/nobackup/users/abonaca/v21_sim/adopted/r09run02_prograde'   # mw_prograde: disc as in the MW
+
+
+def plot_prograde_circle_density():
+    """plot_circle_density for the reversed-disc (MW-like, Lz < 0) run."""
+    plot_circle_density(src=LOCAL + 'r09run02_prograde/', lz=(-3.5, 1.5), disc='$L_z < 0$, as the MW',
+                        label='reversed (MW-like) disc, ',
+                        out='/home/ana/projects/glossary/plots/prograde_mw_stars_ELz_zb_circle_density.png')
+
+
 if __name__ == '__main__':
-    if len(sys.argv) > 2 and sys.argv[1] == 'periods':
+    if len(sys.argv) > 2 and sys.argv[1] == 'prograde':
+        compute(float(sys.argv[2]), d=PROGRADE)
+    elif len(sys.argv) > 2 and sys.argv[1] == 'periods':
         periods(float(sys.argv[2]))
     else:
         compute(float(sys.argv[1]) if len(sys.argv) > 1 else 0.)
