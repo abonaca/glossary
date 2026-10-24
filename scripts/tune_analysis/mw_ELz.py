@@ -197,7 +197,7 @@ def periods(t=0., k=9, i=2, tint_stars=3., tint_sgr=12., zmin=2., bmin=30.):
           % (len(s), np.isnan(Tr).sum(), Tr_sgr[0] * GYR, Tphi_sgr[0] * GYR))
 
 
-def plot_periods(times=(-3., 0.), bins=np.linspace(0.05, 0.25, 50),
+def plot_periods(times=(-3., 0.), bins=np.linspace(0.05, 0.25, 70),
                  out='/home/ana/projects/glossary/plots/adopted_mw_stars_Tr_zb_circle.png'):
     """Histograms of the stars' radial periods [Gyr] (periods()), one panel per time, with Sgr's n:1 resonances at
     that time (T_Sgr / n, T_Sgr = Sgr's radial period) that fall within the range of the stars' periods."""
