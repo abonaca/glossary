@@ -52,15 +52,23 @@ def build(k=9, i=2, out=None):
 def centres(k=9, i=2, d=None):
     """Centres (v21_tune.track_centres) of the reversed-disc run on the tuning runs' snapshot grid (every 1/8 time
     unit, 25 snapshots), so the procedure, and the membership tracking, are the same as for round k run i. The
-    grid snapshots are cut out of the dense evol.nemo in one s2s pass into a temporary evol_grid.nemo."""
+    grid snapshots are cut out of the dense evol.nemo (three s2s passes) into a temporary evol_grid.nemo."""
     import json, numpy as np, v21_tune as vt, v21_ics as vi, r0_noise as rn
     d = d or os.path.join(ADOPTED, 'r%02drun%02d_prograde' % (k, i))
     grid = vt.T_START + np.arange(25) * vt.SNAP_STEP
     f = os.path.join(d, 'evol_grid.nemo')
     if os.path.exists(f):
         os.remove(f)
-    vi._nemo('s2s %s %s times=%s' % (os.path.join(d, 'evol.nemo'), f,
-                                     ','.join('%.6f:%.6f' % (t - 1e-4, t + 1e-4) for t in grid)))
+    # s2s mis-selects with a long list of time ranges (25 ranges gave wrong snapshots after the 13th), so cut the
+    # grid in chunks of 9 ranges and concatenate the chunk files (NEMO snapshot files concatenate with cat)
+    parts = []
+    for n, a in enumerate(range(0, len(grid), 9)):
+        parts.append(f + '.%d' % n)
+        vi._nemo('s2s %s %s times=%s' % (os.path.join(d, 'evol.nemo'), parts[-1],
+                                         ','.join('%.6f:%.6f' % (t - 1e-4, t + 1e-4) for t in grid[a:a + 9])))
+    vi._nemo('cat %s > %s' % (' '.join(parts), f))
+    for p in parts:
+        os.remove(p)
     times = rn.snapshot_times(f)
     if len(times) != len(grid) or np.max(np.abs(times - grid)) > 1e-6:
         raise RuntimeError('grid snapshots: %s' % times)
