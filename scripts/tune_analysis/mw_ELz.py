@@ -7,7 +7,7 @@ rerun in v21_sim/adopted/r09run02 is identical), in the MW's own potential at th
     plot_sky(circle=True)   # ... seen from anywhere on the solar circle -> plots/adopted_mw_stars_ELz_zb_circle.png
     plot_circle_density()   # same selection, density at t = -3 and 0 -> plots/adopted_mw_stars_ELz_zb_circle_density.png
     periods(t)       # on OBS: radial periods of the solar-circle selection and of Sgr -> mw_periods_t*.npz
-    plot_periods()   # locally: period histograms at t = -3 and 0, Sgr's period and its 2:1, 3:1 -> plots/adopted_mw_stars_Tr_zb_circle.png
+    plot_periods()   # locally: period histograms at t = -3 and 0 with Sgr's n:1 resonances in range -> plots/adopted_mw_stars_Tr_zb_circle.png
     plot_circle_Ehist()     # same selection, energy histograms at t = -3 and 0 -> plots/adopted_mw_stars_E_zb_circle.png
 
 Frame: positions and velocities relative to the MW centre (shrinking sphere on the MW stars with a 3 kpc velocity
@@ -197,28 +197,34 @@ def periods(t=0., k=9, i=2, tint_stars=3., tint_sgr=12., zmin=2., bmin=30.):
           % (len(s), np.isnan(Tr).sum(), Tr_sgr[0] * GYR, Tphi_sgr[0] * GYR))
 
 
-def plot_periods(times=(-3., 0.), bins=np.linspace(0, 0.6, 61),
+def plot_periods(times=(-3., 0.), bins=np.linspace(0.04, 0.35, 125),
                  out='/home/ana/projects/glossary/plots/adopted_mw_stars_Tr_zb_circle.png'):
-    """Histograms of the stars' radial periods [Gyr] (periods()), one panel per time, with Sgr's radial period at
-    that time and the periods of its 2:1 and 3:1 resonances (T_Sgr / 2, T_Sgr / 3)."""
-    fig, ax = plt.subplots(len(times), 1, figsize=(6.5, 3.2 * len(times)), sharex=True)
+    """Histograms of the stars' radial periods [Gyr] (periods()), one panel per time, with Sgr's n:1 resonances at
+    that time (T_Sgr / n, T_Sgr = Sgr's radial period) that fall within the range of the stars' periods."""
+    fig, ax = plt.subplots(len(times), 1, figsize=(7.5, 3.4 * len(times)), sharex=True)
     for a, t in zip(ax, times):
         d = np.load(LOCAL + 'mw_periods_t%+.3f.npz' % t)
         Tr, T = d['Tr'] * GYR, d['Tr_sgr'] * GYR
-        n = a.hist(Tr[np.isfinite(Tr)], bins=bins, histtype='step', color='k')[0]
-        a.set_ylim(0, 1.25 * n.max())
-        for f, ls in ((1, '-'), (2, '--'), (3, ':')):
-            a.axvline(T / f, color='C3', ls=ls, label='Sgr %s (%.3f Gyr)' % ('$T_r$' if f == 1 else '%d:1' % f, T / f))
-        a.set_ylabel('stars per %.3g Gyr' % (bins[1] - bins[0]))
-        a.text(0.02, 0.96, 't = %+.2f Gyr\n|z| > 2 kpc, |b| > 30$^\\circ$ from the solar circle (%d stars)'
-               % (t * GYR, len(Tr)), transform=a.transAxes, va='top', fontsize=9)
-        a.legend(fontsize=8, loc='upper right')
+        n = a.hist(Tr, bins=bins, histtype='step', color='k')[0]
+        a.set_ylim(0, 1.3 * n.max())
+        for q in range(2, 100):
+            if T / q < Tr.min():
+                break
+            if T / q <= Tr.max():
+                a.axvline(T / q, color='C3', lw=0.8, alpha=0.7)
+                if T / q - T / (q + 1) > 0.004 * (bins[-1] - bins[0]) / 0.31 * 1.5:   # label only where they fit
+                    a.text(T / q, 1.27 * n.max(), '%d:1' % q, color='C3', fontsize=7, ha='center', va='top', rotation=90,
+                           bbox=dict(fc='w', ec='none', pad=0.5))
+        a.set_ylabel('stars per %.3g Myr' % (1e3 * (bins[1] - bins[0])))
+        a.text(0.98, 0.80, 't = %+.2f Gyr, %d stars\n|z| > 2 kpc, |b| > 30$^\\circ$ from the solar circle\n'
+               'Sgr $T_r$ = %.3f Gyr; red lines: $T_r$ / n' % (t * GYR, len(Tr), T), transform=a.transAxes,
+               va='top', ha='right', fontsize=9, bbox=dict(fc='w', ec='none'), zorder=5)
+    ax[-1].set_xlim(bins[0], bins[-1])
     ax[-1].set_xlabel('radial period in the frozen MW potential [Gyr]')
     fig.tight_layout()
     fig.savefig(out, dpi=200)
     plt.close(fig)
     print(out)
-
 
 if __name__ == '__main__':
     if len(sys.argv) > 2 and sys.argv[1] == 'periods':
