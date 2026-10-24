@@ -6,6 +6,8 @@ rerun in v21_sim/adopted/r09run02 is identical), in the MW's own potential at th
     plot_sky()       # locally: stars with |z| > 2 kpc and |b| > 30 deg seen from the Sun -> plots/adopted_mw_stars_ELz_zb_sun.png
     plot_sky(circle=True)   # ... seen from anywhere on the solar circle -> plots/adopted_mw_stars_ELz_zb_circle.png
     plot_circle_density()   # same selection, density at t = -3 and 0 -> plots/adopted_mw_stars_ELz_zb_circle_density.png
+    periods(t)       # on OBS: radial periods of the solar-circle selection and of Sgr -> mw_periods_t*.npz
+    plot_periods()   # locally: period histograms at t = -3 and 0, Sgr's period and its 2:1, 3:1 -> plots/adopted_mw_stars_Tr_zb_circle.png
     plot_circle_Ehist()     # same selection, energy histograms at t = -3 and 0 -> plots/adopted_mw_stars_E_zb_circle.png
 
 Frame: positions and velocities relative to the MW centre (shrinking sphere on the MW stars with a 3 kpc velocity
@@ -23,10 +25,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 plt.style.use('default')
 NSTARS, NMW = 1000000, 5000000          # MW stars first, then MW dark matter (R2.json)
+GYR = 0.9778                            # Gyr per model time unit
 LOCAL = '/home/ana/projects/glossary/output/v21_sim/adopted/'
 
 
-def compute(t=0., k=9, i=2, outdir=None):
+def _snapshot_potential(t, k=9, i=2):
+    """MW-centred MW particles at time t and the MW (halo + stars) expansions; also the centres file and index."""
     import agama, v21_tune as vt, r0_noise as rn
     agama.setUnits(length=1, velocity=1, mass=vt.vi.MASS_UNIT)
     d = vt.run_dir(k, i)
@@ -36,6 +40,11 @@ def compute(t=0., k=9, i=2, outdir=None):
     xv, m = xv[:NMW].copy(), m[:NMW]
     xv -= c['mw'][j]
     pot = agama.Potential(rn.fit(xv[NSTARS:], m[NSTARS:], 'halo'), rn.fit(xv[:NSTARS], m[:NSTARS], 'disk'))
+    return xv, pot, c, j, d
+
+
+def compute(t=0., k=9, i=2, outdir=None):
+    xv, pot, c, j, d = _snapshot_potential(t, k, i)
     s = xv[:NSTARS]
     E = 0.5 * np.sum(s[:, 3:]**2, 1) + pot.potential(s[:, :3])
     L = np.cross(s[:, :3], s[:, 3:])
@@ -154,5 +163,65 @@ def plot_circle_Ehist(times=(-3., 0.), zmin=2., bmin=30., bins=np.linspace(-16, 
     plt.close(fig)
     print(out)
 
+def radial_periods(pot, ic, tint, dt=0.001, chunk=2000):
+    """Radial periods [model time units] of the orbits from ic in the frozen potential pot: mean interval between
+    successive pericentres (local minima of r on a grid of step dt) over an integration of length tint. Also the
+    mean azimuthal period 2 pi tint / |total change of phi|. NaN where fewer than 2 pericentres."""
+    import agama
+    n = int(round(tint / dt)) + 1
+    Tr, Tphi = np.full(len(ic), np.nan), np.full(len(ic), np.nan)
+    for a in range(0, len(ic), chunk):
+        orb = agama.orbit(potential=pot, ic=ic[a:a + chunk], time=tint, trajsize=n)
+        for q, (tt, w) in enumerate(orb):
+            r = np.linalg.norm(w[:, :3], axis=1)
+            p = np.where((r[1:-1] < r[:-2]) & (r[1:-1] <= r[2:]))[0] + 1
+            if len(p) > 1:
+                Tr[a + q] = (tt[p[-1]] - tt[p[0]]) / (len(p) - 1)
+            phi = np.unwrap(np.arctan2(w[:, 1], w[:, 0]))
+            Tphi[a + q] = 2 * np.pi * tt[-1] / abs(phi[-1] - phi[0])
+    return Tr, Tphi
+
+
+def periods(t=0., k=9, i=2, tint_stars=3., tint_sgr=12., zmin=2., bmin=30.):
+    """On OBS: radial (and azimuthal) periods, in the frozen MW potential at time t, of the stars passing the
+    solar-circle selection at t and of Sgr (its centre relative to the MW centre, as a test particle: no mass loss,
+    no dynamical friction, no LMC). Times in model units (x 0.9778 Gyr)."""
+    xv, pot, c, j, d = _snapshot_potential(t, k, i)
+    s = np.where(circle_fraction(xv[:NSTARS, :3], zmin, bmin) > 0)[0]
+    Tr, Tphi = radial_periods(pot, xv[s], tint_stars)
+    sgr = c['sgr'][j] - c['mw'][j]
+    Tr_sgr, Tphi_sgr = radial_periods(pot, sgr[None], tint_sgr)
+    out = os.path.join(d, 'mw_periods_t%+.3f.npz' % t)
+    np.savez(out, index=s, Tr=Tr, Tphi=Tphi, Tr_sgr=Tr_sgr[0], Tphi_sgr=Tphi_sgr[0], sgr=sgr, t=t)
+    print(out, '%d stars, %d without 2 pericentres; Sgr Tr = %.3f Gyr, Tphi = %.3f Gyr'
+          % (len(s), np.isnan(Tr).sum(), Tr_sgr[0] * GYR, Tphi_sgr[0] * GYR))
+
+
+def plot_periods(times=(-3., 0.), bins=np.linspace(0, 0.6, 61),
+                 out='/home/ana/projects/glossary/plots/adopted_mw_stars_Tr_zb_circle.png'):
+    """Histograms of the stars' radial periods [Gyr] (periods()), one panel per time, with Sgr's radial period at
+    that time and the periods of its 2:1 and 3:1 resonances (T_Sgr / 2, T_Sgr / 3)."""
+    fig, ax = plt.subplots(len(times), 1, figsize=(6.5, 3.2 * len(times)), sharex=True)
+    for a, t in zip(ax, times):
+        d = np.load(LOCAL + 'mw_periods_t%+.3f.npz' % t)
+        Tr, T = d['Tr'] * GYR, d['Tr_sgr'] * GYR
+        n = a.hist(Tr[np.isfinite(Tr)], bins=bins, histtype='step', color='k')[0]
+        a.set_ylim(0, 1.25 * n.max())
+        for f, ls in ((1, '-'), (2, '--'), (3, ':')):
+            a.axvline(T / f, color='C3', ls=ls, label='Sgr %s (%.3f Gyr)' % ('$T_r$' if f == 1 else '%d:1' % f, T / f))
+        a.set_ylabel('stars per %.3g Gyr' % (bins[1] - bins[0]))
+        a.text(0.02, 0.96, 't = %+.2f Gyr\n|z| > 2 kpc, |b| > 30$^\\circ$ from the solar circle (%d stars)'
+               % (t * GYR, len(Tr)), transform=a.transAxes, va='top', fontsize=9)
+        a.legend(fontsize=8, loc='upper right')
+    ax[-1].set_xlabel('radial period in the frozen MW potential [Gyr]')
+    fig.tight_layout()
+    fig.savefig(out, dpi=200)
+    plt.close(fig)
+    print(out)
+
+
 if __name__ == '__main__':
-    compute(float(sys.argv[1]) if len(sys.argv) > 1 else 0.)
+    if len(sys.argv) > 2 and sys.argv[1] == 'periods':
+        periods(float(sys.argv[2]))
+    else:
+        compute(float(sys.argv[1]) if len(sys.argv) > 1 else 0.)
