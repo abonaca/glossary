@@ -135,7 +135,7 @@ def plot_circle_density(times=(-3., 0.), zmin=2., bmin=30.,
     print(out)
 
 
-def plot_circle_Ehist(times=(-3., 0.), zmin=2., bmin=30., bins=np.linspace(-16, -8, 50),
+def plot_circle_Ehist(times=(-3., 0.), zmin=2., bmin=30., bins=np.linspace(-16, -8, 70),
                       out='/home/ana/projects/glossary/plots/adopted_mw_stars_E_zb_circle.png'):
     """Energy histograms of the stars passing the solar-circle selection (as plot_sky(circle=True)), applied
     separately at each time (top to bottom); bin edges in 10^4 (km/s)^2."""
