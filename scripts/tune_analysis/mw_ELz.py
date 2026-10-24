@@ -5,8 +5,10 @@ rerun in v21_sim/adopted/r09run02 is identical), in the MW's own potential at th
     plot()           # locally: E-Lz density -> plots/adopted_mw_stars_ELz.png
 
 Frame: positions and velocities relative to the MW centre (shrinking sphere on the MW stars with a 3 kpc velocity
-aperture, v21_tune.track_centres -> centres.npz). Lz = x vy - y vx in V21's Galactocentric axes, where the disc
-rotates with Lz < 0 (the Sun at x = -8.1 kpc moves at vy = +245.6 km/s). E excludes the LMC and Sgr potentials.
+aperture, v21_tune.track_centres -> centres.npz). Lz = x vy - y vx in V21's Galactocentric axes. The model disc
+rotates with Lz > 0 (Agama QuasiIsothermal DF, as in V21's create_mw.py, which does not flip it), i.e. opposite to
+the Sun's motion in the astropy frame V21 use for the satellites (Sun at x = -8.1 kpc, vy = +245.6 km/s -> Lz < 0).
+E excludes the LMC and Sgr potentials.
 """
 import sys, os
 sys.path.insert(0, '/home/ana/projects/glossary/scripts')
@@ -44,9 +46,9 @@ def plot(f=LOCAL + 'mw_ELz_t+0.000.npz', out='/home/ana/projects/glossary/plots/
     d = np.load(f)
     E, Lz = d['E'] / 1e4, d['L'][:, 2] / 1e3
     fig, ax = plt.subplots(figsize=(7.5, 6))
-    h = ax.hist2d(Lz, E, bins=(400, 300), range=((-4.5, 1.5), (-30, -8)), norm=LogNorm(), cmap='Greys', rasterized=True)
+    h = ax.hist2d(Lz, E, bins=(400, 300), range=((-1., 5.5), (-26, -5)), norm=LogNorm(), cmap='Greys', rasterized=True)
     fig.colorbar(h[3], ax=ax, label='stars per bin')
-    ax.set_xlabel('$L_z$ [$10^3$ kpc km/s]  (disc rotation: $L_z$ < 0)')
+    ax.set_xlabel('$L_z$ [$10^3$ kpc km/s]')
     ax.set_ylabel('E (MW potential) [$10^4$ (km/s)$^2$]')
     ax.text(0.02, 0.98, 'adopted model (r9 run 2), MW stars, t = 0', transform=ax.transAxes, va='top', fontsize=9)
     fig.tight_layout()
