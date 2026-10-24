@@ -197,7 +197,7 @@ def periods(t=0., k=9, i=2, tint_stars=3., tint_sgr=12., zmin=2., bmin=30.):
           % (len(s), np.isnan(Tr).sum(), Tr_sgr[0] * GYR, Tphi_sgr[0] * GYR))
 
 
-def plot_periods(times=(-3., 0.), bins=np.linspace(0.04, 0.35, 125),
+def plot_periods(times=(-3., 0.), bins=np.linspace(0.05, 0.25, 50),
                  out='/home/ana/projects/glossary/plots/adopted_mw_stars_Tr_zb_circle.png'):
     """Histograms of the stars' radial periods [Gyr] (periods()), one panel per time, with Sgr's n:1 resonances at
     that time (T_Sgr / n, T_Sgr = Sgr's radial period) that fall within the range of the stars' periods."""
@@ -207,10 +207,11 @@ def plot_periods(times=(-3., 0.), bins=np.linspace(0.04, 0.35, 125),
         Tr, T = d['Tr'] * GYR, d['Tr_sgr'] * GYR
         n = a.hist(Tr, bins=bins, histtype='step', color='k')[0]
         a.set_ylim(0, 1.3 * n.max())
+        lo, hi = max(Tr.min(), bins[0]), min(Tr.max(), bins[-1])
         for q in range(2, 100):
-            if T / q < Tr.min():
+            if T / q < lo:
                 break
-            if T / q <= Tr.max():
+            if T / q <= hi:
                 a.axvline(T / q, color='C3', lw=0.8, alpha=0.7)
                 if T / q - T / (q + 1) > 0.004 * (bins[-1] - bins[0]) / 0.31 * 1.5:   # label only where they fit
                     a.text(T / q, 1.27 * n.max(), '%d:1' % q, color='C3', fontsize=7, ha='center', va='top', rotation=90,
