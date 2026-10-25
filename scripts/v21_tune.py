@@ -347,7 +347,8 @@ def finish_round(k, block=False, move_perturbed=True):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.move(src, dst)
     if not ok:
-        new_round(k + 1, info['theta_next'], info['delta'], note='Gauss-Newton step from round %d' % k)
+        new_round(k + 1, info['theta_next'], info['delta'], note='Gauss-Newton step from round %d' % k,
+                  base_ics=info.get('base_ics'), base_theta=info.get('base_theta'))
     return info
 
 
