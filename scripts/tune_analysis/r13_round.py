@@ -1,10 +1,12 @@
-"""Round 13: Jacobian round (base + 12 nudges) around round 12's base plus 0.5 of round 12's Gauss-Newton step.
+"""Round 13 (redo): Jacobian round (base + 12 nudges) around round 12's base plus 0.1 of round 12's Gauss-Newton step.
 
 Round 12 (0.2 x the J11 step) brought Sgr to 0.35 Myr late along its orbit and every miss within ~2x the tolerance.
 J12 (full 12x12, condition ~350 in tolerance/nudge units) is better behaved than J11 (~3000), but the full J11 step
-had overshot Sgr's timing ~5x, so this round takes half of the J12 step. Built, like rounds 11-12, from
-v21_sim/adopted/r09run02_prograde/ics.nemo (MW disc rotating as in the MW), with the same nudges. The round 13 that
-finish_round(12) set up with the full step is in SCRAP/round13_fullstep_J12.
+had overshot Sgr's timing ~5x. The first round 13 took 0.5 of the J12 step (commit 983033f) and went backwards: Sgr
+moved from 0.35 Myr late to 0.89 Myr early, against J12's prediction, so this redo takes 0.1 of the J12 step. Built,
+like rounds 11-12, from v21_sim/adopted/r09run02_prograde/ics.nemo (MW disc rotating as in the MW), with the same
+nudges. The round 13 that finish_round(12) set up with the full step is in SCRAP/round13_fullstep_J12, the 0.5 round
+13 in SCRAP/round13_damp0.5 and the round 14 that finish_round(13) set up from it in SCRAP/round14_fullstep_J13.
 
     setup()     # on OBS: TUNE/round13/round.json
     check()     # on OBS: round.json reproduces
@@ -17,7 +19,7 @@ import json, os
 import numpy as np
 
 K = 13
-DAMP = 0.5
+DAMP = 0.1
 NOTE = 'Round 12 base + %g x round 12 Gauss-Newton step (J12, full matrix)' % DAMP
 
 
