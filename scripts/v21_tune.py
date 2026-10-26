@@ -310,11 +310,11 @@ def gauss_newton(F0, Fk, delta, block=False):
     return dtheta, J
 
 
-def finish_round(k, block=False, move_perturbed=True):
+def finish_round(k, block=False, move_perturbed=False):
     """
     After all runs of round k: track centres, endpoints, Gauss-Newton step; write the results into
-    round.json and set up round k+1 unless the base run is within tolerance. Snapshots of the
-    perturbed runs go to SCRAP (the base run's are kept).
+    round.json and set up round k+1 unless the base run is within tolerance. All runs' snapshots stay in
+    the round directory (move_perturbed=True would move the perturbed runs' evol.nemo to SCRAP).
     """
     d = round_dir(k)
     info = json.load(open(os.path.join(d, 'round.json')))
