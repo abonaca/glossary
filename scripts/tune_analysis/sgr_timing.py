@@ -19,7 +19,7 @@ import v21_tune as vt
 from r9_analysis import timing_split
 
 T = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../output/v21_sim/tune/')
-ROUNDS = ('round11', 'round12_fullstep', 'round12', 'round13_damp0.5', 'round13', 'round14', 'round15', 'round16')
+ROUNDS = ('round11', 'round12_fullstep', 'round12', 'round13_damp0.5', 'round13', 'round14', 'round15', 'round16_lm')
 PLOTS = '/home/ana/projects/glossary/plots/'
 UNITS = ['kpc'] * 3 + ['km/s'] * 3
 
@@ -88,7 +88,7 @@ def plot_partial(out=PLOTS + 'sgr_arrival_vs_start.png'):
     return f
 
 
-def x_fix(k=15, rounds=('round11', 'round12', 'round13', 'round14', 'round15', 'round16')):
+def x_fix(k=15, rounds=('round11', 'round12', 'round13', 'round14', 'round15', 'round16_lm')):
     """Round k's base misses after an Sgr x0 shift that zeroes its arrival offset, with each round's Sgr x0 column."""
     d = json.load(open(os.path.join(T, 'round%02d' % k, 'round.json')))
     r = np.array(d['endpoints'][0]) - vt.TARGET
@@ -115,3 +115,40 @@ if __name__ == '__main__':
     print('round 15 miss', r, 'arrival %+.2f' % arrival(r))
     for rr, dx, m in out:
         print('%-10s dx %+.4f kpc -> %s' % (rr, dx, m))
+
+
+SGR5 = [6, 8, 9, 10, 11]          # Sgr x, z, vx, vy, vz (y left fixed)
+CORE = ('round11', 'round12', 'round13', 'round14', 'round15', 'round16_lm')
+
+
+def fit_jacobian(rounds=ROUNDS):
+    """Linear fit of all 12 t=0 endpoints on all 12 t=-3 starts over every run of the given rounds: a Jacobian that
+    averages over rounds (and over run-to-run scatter). Returns J (12 outputs x 12 starts) and each output's rms
+    residual."""
+    th, miss, a, lab = collect(rounds)
+    X = np.hstack((np.ones((len(th), 1)), th - th[0]))
+    B, *_ = np.linalg.lstsq(X, miss, rcond=None)
+    res = miss - X @ B
+    return B[1:].T, np.sqrt(np.sum(res ** 2, axis=0) / (len(th) - 13))
+
+
+def round_jacobian(name):
+    d = json.load(open(os.path.join(T, name, 'round.json')))
+    F = np.array(d['endpoints'])
+    if 'runs' in d:
+        J = np.full((12, 12), np.nan)
+        J[:, 6:] = (F[1:7] - F[0]).T / np.array(d['sgr_delta'])[None, :]
+        return J
+    return (F[1:] - F[0]).T / np.array(d['delta'])[None, :]
+
+
+def step(r, J, cols=SGR5, lam=0., delta=None):
+    """Step in the start coordinates `cols` (others fixed) minimising |W (r + J step)|^2, W = 1/TOL over all 12
+    endpoint components; Marquardt damping lam in tolerance-per-nudge units."""
+    delta = np.asarray(delta if delta is not None else json.load(open(os.path.join(T, 'round11', 'round.json')))['delta'])
+    A = J[:, cols] / vt.TOL[:, None] * delta[cols][None, :]
+    M = A.T @ A
+    u = -np.linalg.solve(M + lam * np.diag(np.diag(M)), A.T @ (r / vt.TOL))
+    s = np.zeros(12)
+    s[cols] = u * delta[cols]
+    return s
