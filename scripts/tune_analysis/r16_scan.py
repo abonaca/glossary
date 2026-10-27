@@ -81,8 +81,8 @@ def check():
     d = json.load(open(os.path.join(vt.round_dir(K), 'round.json')))
     theta, o, runs, prev = _runs()
     print('runs: %s; theta == r%d: %s; LMC fixed in all runs: %s; base_ics == r%d: %s; base_theta == r%d: %s'
-          % (np.array_equal(d['runs'], runs), K - 1, np.array_equal(d['theta'], prev['theta']), K - 1,
-             all(np.array_equal(r[:6], prev['theta'][:6]) for r in d['runs']), d['base_ics'] == prev['base_ics'],
+          % (np.array_equal(d['runs'], runs), K - 1, np.array_equal(d['theta'], prev['theta']),
+             all(np.array_equal(r[:6], prev['theta'][:6]) for r in d['runs']), K - 1, d['base_ics'] == prev['base_ics'],
              K - 1, d['base_theta'] == prev['base_theta']))
     for lab, off in zip(d['labels'], d['offsets']):
         print('  %-16s %s' % (lab, np.array2string(np.array(off), precision=4)))
