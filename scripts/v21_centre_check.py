@@ -6,9 +6,12 @@ sizes (the velocity aperture of the MW and LMC shrinking-sphere centres, the rad
 centre), and bootstrap the particles of the base run to get the error of each estimator. The
 round's Jacobian can then be recomputed for each aperture and compared with the bootstrap error.
 
-Usage (on OBS, ~1-2 h for 13 runs):
+Usage (on OBS, ~1-2 h for 13 runs; obs/centre_check.sbatch ROUND):
     import v21_centre_check as cc
     res = cc.measure_round(8)          # -> TUNE/round08/centre_check.npz
+
+The MW velocity is also measured from the MW dark matter (R_VEL_MWDM) around the stellar MW centre, as a check of
+the star-based MW velocity.
 """
 import os
 import time
@@ -16,13 +19,14 @@ import numpy as np
 import v21_tune as vt
 import r0_noise as rn
 
-R_VEL_MW = (0.5, 1., 2., 3.)          # kpc, aperture of the mean velocity around the MW centre
-R_VEL_LMC = (1., 2., 3., 5.)          # kpc, same for the LMC (v21_tune uses 1)
+R_VEL_MW = (1., 2., 3., 5., 8.)      # kpc, aperture of the mean star velocity around the MW centre (v21_tune: 3)
+R_VEL_MWDM = (3., 5., 10., 20.)       # kpc, same with the MW dark matter around the (stellar) MW centre
+R_VEL_LMC = (2., 3., 5., 8.)          # kpc, same for the LMC (v21_tune: 5)
 R_SGR = (2., 3., 5., 7.)              # kpc, radius of the Sgr median centre (V21 and v21_tune use 5)
 
 
 def final_snapshot(k, i):
-    """Path of the evolved snapshot file of run i of round k (perturbed runs are moved to SCRAP)."""
+    """Path of the evolved snapshot file of run i of round k (before 822b296, perturbed runs were moved to SCRAP)."""
     f = os.path.join(vt.run_dir(k, i), 'evol.nemo')
     if os.path.exists(f):
         return f
@@ -67,11 +71,16 @@ def centres(xv, m, comps, guess):
     a = comps['mw'][0]
     xm, mm = xv[a:a + nst], m[a:a + nst]
     cm = _shrink(xm[:, :3], mm, guess['mw'][:3], 30.)
-    out = dict(mw=[], lmc=[], sgr=[], n_mw=[], n_lmc=[], n_sgr=[])
+    out = dict(mw=[], mwdm=[], lmc=[], sgr=[], n_mw=[], n_mwdm=[], n_lmc=[], n_sgr=[])
     for r in R_VEL_MW:
         v, n = _mean_vel(xm, mm, cm, r)
         out['mw'].append(np.hstack((cm, v)))
         out['n_mw'].append(n)
+    xd, md = xv[a + nst:comps['mw'][1]], m[a + nst:comps['mw'][1]]
+    for r in R_VEL_MWDM:
+        v, n = _mean_vel(xd, md, cm, r)
+        out['mwdm'].append(np.hstack((cm, v)))
+        out['n_mwdm'].append(n)
     a, b = comps['lmc']
     xl, ml = xv[a:b], m[a:b]
     cl = _shrink(xl[:, :3], ml, guess['lmc'][:3], 20.)
@@ -116,11 +125,21 @@ def bootstrap(xv, m, comps, guess, nboot=100, seed=1):
     return {key: np.array(val) for key, val in out.items()}
 
 
+def run_ids(k):
+    """Runs of round k with tracked centres (centres.npz) and an evolved snapshot."""
+    ids, i = [], 0
+    while os.path.isdir(vt.run_dir(k, i)):
+        if os.path.exists(os.path.join(vt.run_dir(k, i), 'centres.npz')) and os.path.exists(final_snapshot(k, i)):
+            ids.append(i)
+        i += 1
+    return ids
+
+
 def measure_round(k, nboot=100):
-    """Centres of the final snapshot of all 13 runs of round k, plus the bootstrap of the base run."""
+    """Centres of the final snapshot of every run of round k (run_ids), plus the bootstrap of the base run."""
     comps = vt.json.load(open(vt.BASE_ICS + '.json'))['components']
-    res = {}
-    for i in range(13):
+    res = {'run': np.array(run_ids(k))}
+    for i in res['run']:
         t0 = time.time()
         tr = np.load(os.path.join(vt.run_dir(k, i), 'centres.npz'))
         guess = {name: tr[name][-1] for name in ('mw', 'lmc', 'sgr')}
@@ -136,7 +155,8 @@ def measure_round(k, nboot=100):
         print('run %2d: %.0f s, n_lmc %s, n_sgr %s' % (i, time.time() - t0, c['n_lmc'], c['n_sgr']), flush=True)
         del xv, m
     res = {key: np.array(val) for key, val in res.items()}
-    res.update(r_vel_mw=np.array(R_VEL_MW), r_vel_lmc=np.array(R_VEL_LMC), r_sgr=np.array(R_SGR))
+    res.update(r_vel_mw=np.array(R_VEL_MW), r_vel_mwdm=np.array(R_VEL_MWDM), r_vel_lmc=np.array(R_VEL_LMC),
+               r_sgr=np.array(R_SGR))
     out = os.path.join(vt.round_dir(k), 'centre_check.npz')
     np.savez(out, **res)
     print('saved', out)
