@@ -199,7 +199,10 @@ def build_ics(k, i):
     """
     Initial snapshot of run i of round k: R2's particles with the LMC and Sgr moved from V21's t=-3
     centres (where R2 placed them) to the run's theta. A round with base_ics in round.json starts instead from
-    that snapshot, moving the LMC and Sgr from its base_theta.
+    that snapshot, moving the LMC and Sgr from its base_theta. A round with sgr_rscale (one factor per run) first
+    rescales Sgr about its centre of mass, positions x lam and velocities / sqrt(lam), which maps V21's isolated
+    equilibrium Sgr model onto another equilibrium with the same mass and lam times the size (as create_sgr.py's
+    rscale).
     """
     comps = json.load(open(BASE_ICS + '.json'))['components']
     info = json.load(open(os.path.join(round_dir(k), 'round.json')))
@@ -209,6 +212,12 @@ def build_ics(k, i):
     else:
         xv, m = agama.readSnapshot(BASE_ICS + '.nemo')
         shift = run_theta(k, i) - theta_v21()
+    lam = info['sgr_rscale'][i] if 'sgr_rscale' in info else 1.
+    if lam != 1.:
+        a, b = comps['sgr']
+        com = np.average(xv[a:b], axis=0, weights=m[a:b])
+        xv[a:b, :3] = com[:3] + lam * (xv[a:b, :3] - com[:3])
+        xv[a:b, 3:] = com[3:] + (xv[a:b, 3:] - com[3:]) / np.sqrt(lam)
     for j, c in enumerate(('lmc', 'sgr')):
         a, b = comps[c]
         xv[a:b] += shift[6 * j:6 * j + 6]
@@ -221,7 +230,8 @@ def build_ics(k, i):
     agama.writeSnapshot(tmp, (xv, m), 'nemo')
     vi._nemo('s2s %s %s time=%g' % (tmp, f, T_START))
     os.remove(tmp)
-    print('round %d run %d: theta = %s' % (k, i, np.array2string(run_theta(k, i), precision=3)))
+    print('round %d run %d: theta = %s%s' % (k, i, np.array2string(run_theta(k, i), precision=3),
+                                              ', Sgr rescaled by %g' % lam if lam != 1. else ''))
     return f
 
 
