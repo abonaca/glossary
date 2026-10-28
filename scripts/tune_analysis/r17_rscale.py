@@ -1,14 +1,16 @@
-"""Round 17: Sgr progenitor size scan at round 15's starts (LMC and Sgr orbit unchanged).
+"""Round 17 (redo, fine): Sgr progenitor size scan at round 15's starts (LMC and Sgr orbit unchanged).
 
 All reversed-disc runs (rounds 11-15) end with 5.7-6.1e8 Msun within 5 kpc of Sgr's centre, against V21's present-day
 (3-4)e8 (sgr_mass.py), and V21 tuned the progenitor's initial radius to get that mass. Each run here rescales Sgr about
 its centre of mass by lam (positions x lam, velocities / sqrt(lam): same mass, an equilibrium lam times larger;
-v21_tune.build_ics, round.json sgr_rescale), at round 15's 12 starting values. lam = 1 repeats round 15. lam = 1.25
-undoes create_sgr.py's rscale = 0.8. Scored per run (kind 'sgr_offsets'); then sgr_mass.measure(17).
+v21_tune.build_ics, round.json sgr_rescale), at round 15's 12 starting values (round 15 itself is lam = 1). The first,
+coarse round 17 (lam 1.0-1.5, commit abbea85, now SCRAP/round17_coarse) gave M(<5 kpc) = 5.8e8 at lam 1, 1.2e8 at
+1.1 and ~3e7 (Sgr disrupted) from 1.2 up, putting V21's (3-4)e8 at lam ~1.02-1.04; this redo steps lam by 0.005.
+Scored per run (kind 'sgr_offsets'); then sgr_mass.measure(17).
 
     setup()     # on OBS: TUNE/round17/round.json
     check()     # on OBS: round.json reproduces
-Submit:  sbatch --array=0-6 ~/projects/glossary/scripts/obs/tune_round.sbatch 17
+Submit:  sbatch --array=0-9 ~/projects/glossary/scripts/obs/tune_round.sbatch 17
 """
 import sys
 sys.path.insert(0, '/home/ana/projects/glossary/scripts')
@@ -17,7 +19,7 @@ import json, os
 import numpy as np
 
 K = 17
-LAMS = (1.0, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5)
+LAMS = tuple(round(1 + 0.005 * j, 3) for j in range(1, 11))     # 1.005 ... 1.05
 NOTE = 'Sgr size scan at round 15 starts: Sgr rescaled about its centre of mass by %s (r17_rscale.py)' % (LAMS,)
 
 
