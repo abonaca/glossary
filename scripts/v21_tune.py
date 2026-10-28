@@ -46,6 +46,10 @@ NSGR_STARS = vi.SGR_COUNTS['nstar']          # Sgr star particles come first wit
 # both were 1 kpc, which left ~0.4 (MW) and ~0.9 (LMC) km/s of sampling error per component
 # (v21_centre_check); the larger apertures cut that to ~0.2 and ~0.3 km/s.
 R_VEL_MW, R_VEL_LMC = 3., 5.
+# Sgr size: every new round rescales Sgr about its centre of mass by this factor (build_ics, round.json sgr_rscale),
+# from round 18 on. lam = 1.03 gives M(<5 kpc) = 3.6e8 Msun today, mid V21's (3-4)e8 (round 17 scan, r17_rscale.py).
+# Rounds without sgr_rscale in round.json (up to 16) used lam = 1.
+SGR_RSCALE = 1.03
 
 
 def round_dir(k):
@@ -61,19 +65,19 @@ def theta_v21():
     return np.concatenate([np.concatenate(vi.initial_phase(c, T_START)) for c in ('lmc', 'sgr')])
 
 
-def new_round(k, theta=None, delta=DELTA, note='', base_ics=None, base_theta=None):
+def new_round(k, theta=None, delta=DELTA, note='', base_ics=None, base_theta=None, sgr_rscale=SGR_RSCALE):
     """Write roundNN/round.json for the base theta (default: V21's) and the perturbation sizes. base_ics (a .nemo
     file with the R2 particle layout) and base_theta (the LMC and Sgr starts in it) replace R2 and V21's starts as
-    the snapshot the runs are built from (build_ics)."""
+    the snapshot the runs are built from (build_ics). sgr_rscale: Sgr size factor of every run."""
     theta = theta_v21() if theta is None else np.asarray(theta, float)
     d = round_dir(k)
     os.makedirs(d, exist_ok=True)
     info = dict(round=k, names=NAMES, theta=theta.tolist(), delta=np.asarray(delta, float).tolist(),
-                target=TARGET.tolist(), tol=TOL.tolist(), note=note)
+                target=TARGET.tolist(), tol=TOL.tolist(), note=note, sgr_rscale=[float(sgr_rscale)] * 13)
     if base_ics is not None:
         info.update(base_ics=base_ics, base_theta=np.asarray(base_theta, float).tolist())
     json.dump(info, open(os.path.join(d, 'round.json'), 'w'), indent=1)
-    print('round %d: theta = %s' % (k, np.array2string(theta, precision=3)))
+    print('round %d: theta = %s, Sgr rescaled by %g' % (k, np.array2string(theta, precision=3), sgr_rscale))
     return info
 
 
@@ -108,7 +112,7 @@ def sgr_orbit_shift(theta, dt, expansions=None):
                      method='DOP853').y[:, -1]
 
 
-def new_sgr_round(k, theta, sgr_delta, scan_dt, note=''):
+def new_sgr_round(k, theta, sgr_delta, scan_dt, note='', sgr_rscale=SGR_RSCALE):
     """
     Sgr-only round (LMC fixed at theta[:6]): run 0 = base theta, runs 1-6 = Sgr's x0..vz0 nudged by
     sgr_delta, runs 7.. = Sgr moved by scan_dt [Myr] along its orbit (sgr_orbit_shift). 13 runs total.
@@ -129,7 +133,8 @@ def new_sgr_round(k, theta, sgr_delta, scan_dt, note=''):
     os.makedirs(d, exist_ok=True)
     info = dict(round=k, kind='sgr', names=NAMES, theta=theta.tolist(),
                 sgr_delta=np.asarray(sgr_delta, float).tolist(), scan_dt=list(map(float, scan_dt)),
-                runs=[r.tolist() for r in runs], target=TARGET.tolist(), tol=TOL.tolist(), note=note)
+                runs=[r.tolist() for r in runs], target=TARGET.tolist(), tol=TOL.tolist(), note=note,
+                sgr_rscale=[float(sgr_rscale)] * len(runs))
     json.dump(info, open(os.path.join(d, 'round.json'), 'w'), indent=1)
     print('round %d (Sgr only): theta = %s' % (k, np.array2string(theta, precision=3)))
     for i, r in enumerate(runs[1:], 1):
@@ -137,7 +142,7 @@ def new_sgr_round(k, theta, sgr_delta, scan_dt, note=''):
     return info
 
 
-def new_offset_round(k, theta, offsets, labels, note=''):
+def new_offset_round(k, theta, offsets, labels, note='', sgr_rscale=SGR_RSCALE):
     """
     Sgr-only round from an explicit list of Sgr start offsets (LMC fixed at theta[:6]): run i starts
     Sgr at theta[6:] + offsets[i]. No base run; every run is scored on its own (finish_round).
@@ -153,7 +158,7 @@ def new_offset_round(k, theta, offsets, labels, note=''):
     os.makedirs(d, exist_ok=True)
     info = dict(round=k, kind='sgr_offsets', names=NAMES, theta=theta.tolist(), offsets=offsets.tolist(),
                 labels=list(labels), runs=[r.tolist() for r in runs], target=TARGET.tolist(), tol=TOL.tolist(),
-                note=note)
+                note=note, sgr_rscale=[float(sgr_rscale)] * len(runs))
     json.dump(info, open(os.path.join(d, 'round.json'), 'w'), indent=1)
     print('round %d (Sgr offsets, %d runs): reference theta = %s' % (k, len(runs), np.array2string(theta, precision=3)))
     for i, (lab, o) in enumerate(zip(labels, offsets)):
@@ -178,6 +183,8 @@ def extend_offset_round(k, offsets, labels, note=''):
         info['runs'].append(th.tolist())
         info['offsets'].append(o.tolist())
         info['labels'].append(lab)
+        if 'sgr_rscale' in info:                     # new runs at the round's Sgr size
+            info['sgr_rscale'].append(info['sgr_rscale'][0])
     if note:
         info['note'] = info.get('note', '') + ' | runs %d-%d: %s' % (n0, len(info['runs']) - 1, note)
     json.dump(info, open(f, 'w'), indent=1)
@@ -358,7 +365,8 @@ def finish_round(k, block=False, move_perturbed=False):
             shutil.move(src, dst)
     if not ok:
         new_round(k + 1, info['theta_next'], info['delta'], note='Gauss-Newton step from round %d' % k,
-                  base_ics=info.get('base_ics'), base_theta=info.get('base_theta'))
+                  base_ics=info.get('base_ics'), base_theta=info.get('base_theta'),
+                  sgr_rscale=info['sgr_rscale'][0] if 'sgr_rscale' in info else SGR_RSCALE)
     return info
 
 
