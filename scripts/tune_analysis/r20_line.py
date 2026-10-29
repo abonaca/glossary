@@ -58,5 +58,46 @@ def check():
              np.allclose(np.array(d['theta']) + np.array(d['offsets'][-1]) / FRACS[-1], r19['theta'])))
 
 
+def plot(out='/home/ana/projects/glossary/plots/tune_r20_line.png'):
+    """Every t=0 miss, Sgr arrival and Sgr M(<5 kpc) against f, with round 18 (f=0) and round 19 (f=1); locally."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import v21_tune as vt, sgr_timing as st
+    plt.style.use('default')
+    T = st.T
+    d = json.load(open(os.path.join(T, 'round20', 'round.json')))
+    ends = [np.array(json.load(open(os.path.join(T, r, 'round.json')))['endpoints'][0]) - vt.TARGET
+            for r in ('round18', 'round19')]
+    f = np.r_[0, d['fracs'], 1]
+    E = np.vstack((ends[0], d['misses'], ends[1]))
+    m5 = np.load(os.path.join(T, 'round20', 'sgr_mass_runs.npz'))['mass'][:, 1]
+    fig, ax = plt.subplots(4, 4, figsize=(16, 13), sharex=True)
+    units = ['kpc'] * 3 + ['km/s'] * 3
+    for j in range(12):
+        a = ax[j // 6 * 2 + j % 6 // 3, j % 3]
+        a.axhspan(-vt.TOL[j], vt.TOL[j], color='0.85', lw=0)
+        a.axhline(0, color='0.5', lw=0.8)
+        a.plot(f, E[:, j], 'k.-')
+        a.plot([0, 1], E[[0, -1], j], 'r:', lw=1)
+        a.set_ylabel('%s miss [%s]' % (vt.NAMES[j], units[j % 6]))
+    a = ax[0, 3]
+    a.axhline(0, color='0.5', lw=0.8)
+    a.plot(f, [st.arrival(e) for e in E], 'k.-')
+    a.set_ylabel('Sgr arrival [Myr early]')
+    a = ax[1, 3]
+    a.axhspan(3e8, 4e8, color='0.85', lw=0)
+    a.plot(d['fracs'], m5, 'k.-')
+    a.set_ylabel(r'Sgr $M(<5\,{\rm kpc})$ [M$_\odot$]')
+    for a in ax[2:, 3]:
+        a.axis('off')
+    for a in ax[-1, :3]:
+        a.set_xlabel('f (0 = round 18 base, 1 = round 19 base)')
+    ax[1, 3].set_xlabel('f')
+    fig.tight_layout()
+    fig.savefig(out, dpi=200)
+    return out
+
+
 if __name__ == '__main__':
     setup() if len(sys.argv) > 1 and sys.argv[1] == 'setup' else check()
