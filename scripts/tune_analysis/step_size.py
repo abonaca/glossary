@@ -5,6 +5,8 @@ together) and the nudge columns of rounds 18 and 19 (same nudges, Sgr rescaled b
     plot_pairs()    # |change of each t=0 miss| vs |f_i - f_j| over all pairs of line runs, with the straight-line
                     #   response between f=0 and f=1 -> plots/tune_step_size_pairs.png
     floors()        # each miss's scatter about a smooth (cubic) fit along the line (physical units)
+    plot_grid()     # 12 x 12: each t=0 miss of the line runs vs each start's difference from round 19's start
+                    #   -> plots/tune_r20_grid.png
     table()         # per nudge: start change, response in each miss for J18 and J19, and the smallest nudge whose
                     #   response clears 3x the floor (largest-response miss), in physical units
 """
@@ -95,3 +97,34 @@ def table():
                         for q in k) +
               '; 3x floor at %.3g %s' % (3 * delta[c] / snr[k[0]], UNITS[c % 6]))
     return resp, fl
+
+
+def plot_grid(out=PLOTS + 'tune_r20_grid.png'):
+    """Rows: t=0 misses; columns: start minus round 19's start; round 20 runs coloured by f, round 18 (f=0) and
+    round 19 (f=1) as open squares; shaded bands: tolerances."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    plt.style.use('default')
+    f, th, E = line()
+    D = th - th[-1]
+    r20 = slice(1, -1)
+    fig, ax = plt.subplots(12, 12, figsize=(30, 28), sharex='col', sharey='row')
+    for i in range(12):
+        for j in range(12):
+            a = ax[i, j]
+            a.axhspan(-vt.TOL[i], vt.TOL[i], color='0.85', lw=0)
+            a.axhline(0, color='0.5', lw=0.5)
+            a.axvline(0, color='0.5', lw=0.5)
+            sc = a.scatter(D[r20, j], E[r20, i], c=f[r20], cmap='viridis', vmin=0, vmax=1, s=10, zorder=3)
+            a.plot(D[[0, -1], j], E[[0, -1], i], 's', mfc='none', mec='r', ms=4, zorder=4)
+            a.tick_params(labelsize=6)
+            if i == 11:
+                a.set_xlabel('%s start - r19 [%s]' % (vt.NAMES[j], UNITS[j % 6]), fontsize=8)
+            if j == 0:
+                a.set_ylabel('%s miss [%s]' % (vt.NAMES[i], UNITS[i % 6]), fontsize=8)
+    fig.tight_layout(rect=(0, 0, 0.97, 1))
+    cb = fig.colorbar(sc, ax=ax, fraction=0.01, pad=0.01)
+    cb.set_label('f (round 20 runs; red squares: round 18 f=0, round 19 f=1)')
+    fig.savefig(out, dpi=200)
+    return out
