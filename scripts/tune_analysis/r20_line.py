@@ -116,8 +116,8 @@ def plot(out='/home/ana/projects/glossary/plots/tune_r20_line.png'):
     ends = [np.array(json.load(open(os.path.join(T, r, 'round.json')))['endpoints'][0]) - vt.TARGET
             for r in ('round18', 'round19')]
     f = np.r_[0, d['fracs'], 1]
-    E = np.vstack((ends[0], d['misses'], ends[1]))
-    m5 = np.load(os.path.join(T, 'round20', 'sgr_mass_runs.npz'))['mass'][:, 1]
+    E = np.vstack((ends[0], d['misses'][:len(d['fracs'])], ends[1]))
+    m5 = np.load(os.path.join(T, 'round20', 'sgr_mass_runs.npz'))['mass'][:len(d['fracs']), 1]
     fig, ax = plt.subplots(4, 4, figsize=(16, 13), sharex=True)
     units = ['kpc'] * 3 + ['km/s'] * 3
     for j in range(12):

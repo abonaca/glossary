@@ -28,8 +28,9 @@ def line():
     d = json.load(open(os.path.join(T, 'round20', 'round.json')))
     r = [json.load(open(os.path.join(T, k, 'round.json'))) for k in ('round18', 'round19')]
     f = np.r_[0, d['fracs'], 1]
-    th = np.vstack((r[0]['theta'], d['runs'], r[1]['theta']))
-    E = np.vstack((np.array(r[0]['endpoints'][0]) - vt.TARGET, d['misses'], np.array(r[1]['endpoints'][0]) - vt.TARGET))
+    n = len(d['fracs'])                                          # line runs only (nudge runs follow)
+    th = np.vstack((r[0]['theta'], d['runs'][:n], r[1]['theta']))
+    E = np.vstack((np.array(r[0]['endpoints'][0]) - vt.TARGET, d['misses'][:n], np.array(r[1]['endpoints'][0]) - vt.TARGET))
     E = np.column_stack((E, [st.arrival(e) for e in E]))
     return f, th, E
 
